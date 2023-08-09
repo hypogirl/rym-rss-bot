@@ -124,7 +124,7 @@ def main():
 
     @bot.command()
     async def add(ctx, *, arg):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id != 455301777055547394:
+        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -153,7 +153,7 @@ def main():
     
     @bot.command()
     async def remove(ctx, *, arg):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id != 455301777055547394:
+        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -167,12 +167,12 @@ def main():
         with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
-        await ctx.send(f"<@{user_id}> **(RYM username: {rym_user})** has been successfully removed to the RYM Updates.")
+        await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}) has been successfully removed from the bot.")
 
     
     @bot.command()
     async def forceupdate(ctx):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id != 455301777055547394:
+        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -189,7 +189,7 @@ def main():
     @bot.command()
     async def save(ctx):
         global users
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id != 455301777055547394:
+        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         with open('users.json', 'w') as users_json:
@@ -198,16 +198,23 @@ def main():
         await ctx.reply("Info saved successfully.")
 
     @bot.command()
-    async def user(ctx, *, arg):
+    async def user(ctx, *, arg=None):
         global users
+
+        if not(arg):
+            rym = users[str(ctx.author.id)]["rym"]
+            await ctx.send(f"Your RYM profile:\nhttps://rateyourmusic.com/~{rym}")
+            return
+        
         user_id = re.search(r"<@(\d{18)}>|(\d{18})", arg).group()
+        
         try:
             rym = users[user_id]["rym"]
         except KeyError:
-            ctx.send("That user is not connected to the bot.")
+            await ctx.send("That user is not connected to the bot.")
             return
         member = ctx.guild.get_member(int(user_id))
-        ctx.send(f"**{member.display_name}**'s RYM profile:\nhttps://rateyourmusic.com/~{rym}")
+        await ctx.send(f"**{member.display_name}**'s RYM profile:\nhttps://rateyourmusic.com/~{rym}")
         
     bot.run(vars.token)
 
