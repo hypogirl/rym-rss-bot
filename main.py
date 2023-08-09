@@ -17,6 +17,11 @@ with open('users.json') as users_json:
     except json.decoder.JSONDecodeError:
         pass
 
+def get_current_time_text():
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    return "[" + current_time + "]"
+
 def parse_ratings(rym_user):
     global users
     url = f"https://rateyourmusic.com/~{rym_user}/data/rss"
@@ -32,7 +37,7 @@ def parse_ratings(rym_user):
 
 async def get_recent_info(member, rym_user, last, feed_channel):
     ratings = parse_ratings(rym_user)
-    print(member.display_name, "parsed.\n")
+    print(get_current_time_text(), member.display_name, "parsed.\n")
 
     for (text, rym_url, review, timestamp) in ratings:
         if timestamp == last:
@@ -42,7 +47,8 @@ async def get_recent_info(member, rym_user, last, feed_channel):
                                                                                 # ["Rated", "2.5", ""] in case it's a rating
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
-        print(rym_url)
+        await asyncio.sleep(60)
+        print(get_current_time_text(), rym_url)
         release_info = get_release_info(rym_url)
 
         if text_info[0][0]:
@@ -51,8 +57,7 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             review = str()
         else:
             user_reviews_url = f"https://rateyourmusic.com/collection/{rym_user}/reviews"
-            await asyncio.sleep(60)
-            rating = get_rating_from_review(user_reviews_url, rym_url)
+            rating = await get_rating_from_review(user_reviews_url, rym_url)
             if rating:
                rated_text = "rated and reviewed"
             else:
@@ -103,9 +108,7 @@ def main():
         feed_channel = bot.get_channel(vars.channel_id)
 
         while True:
-            now = datetime.now()
-            current_time = now.strftime("%H:%M:%S")
-            print(f"[{current_time}] fetching updates...")
+            print(get_current_time_text(), "fetching updates...")
 
             for user_id in list(users):
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
@@ -118,13 +121,13 @@ def main():
 
             now = datetime.now()
             current_time = now.strftime("%H:%M:%S")
-            print(f"[{current_time}] sleeping for {vars.sleep_minutes} minutes")
+            print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
 
             await asyncio.sleep(vars.sleep_minutes * 60)
 
     @bot.command()
     async def add(ctx, *, arg):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -153,7 +156,7 @@ def main():
     
     @bot.command()
     async def remove(ctx, *, arg):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -172,7 +175,7 @@ def main():
     
     @bot.command()
     async def forceupdate(ctx):
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         global users
@@ -189,7 +192,7 @@ def main():
     @bot.command()
     async def save(ctx):
         global users
-        if "Gatekeeper" not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         with open('users.json', 'w') as users_json:
