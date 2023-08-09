@@ -3,3 +3,4 @@
 *.pyc
 vars.py
 users.json
+start.bat
