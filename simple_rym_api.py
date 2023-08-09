@@ -1,5 +1,6 @@
 import requests
 import re
+import asyncio
 from bs4 import BeautifulSoup
 
 def get_release_info(rym_url):
@@ -9,7 +10,12 @@ def get_release_info(rym_url):
     soup = BeautifulSoup(response.content, "html.parser")
 
     release_title_elem = soup.find("div", {"class": "album_title"})
-    release_title_artist = re.findall("(.+)\n +\nBy (.+)", release_title_elem.text)
+    try:
+        artist_name = list(release_title_elem.find("span", {"class": "credited_name"}).children)[0] # this only works for collaborative albums
+    except:
+        release_title_artist = re.findall("(.+)\n +\nBy (.+)", release_title_elem.text)
+    else:
+        release_title_artist = [(re.findall("(.+)\n +\nBy .+", release_title_elem.text)[0], artist_name)]
 
     try:
         primary_genres = soup.find("span", {"class": "release_pri_genres"}).text
@@ -44,16 +50,30 @@ def get_release_info(rym_url):
         "release_type": release_type
     }
 
-def get_rating_from_review(user_reviews_url, release_url):
+async def get_rating_from_review(user_reviews_url, release_url):
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
     response = requests.get(user_reviews_url, headers=headers)
 
     soup = BeautifulSoup(response.content, "html.parser")
     local_url = re.search("(\/release.+)", release_url).group()
     release_url_elem = soup.find("a", {"href": local_url})
-    try:
-        review_rating = float(list(release_url_elem.parent.nextSibling.nextSibling.children)[2]["title"][:3]) # getting a float value (e.g. 5.0) out of a "title= '5.00 stars'" atrribute
-    except:
-        rating = None
+    
+    new_url = user_reviews_url + "/1"
+    page_number = 1
+    max_page = int(soup.find("a", {"class": "navlinknum"}).text)
+
+    while not(release_url_elem):
+        if page_number >= max_page:
+            return None
+
+        page_number += 1
+        new_url = user_reviews_url + "/" + str(page_number)
+        await asyncio.sleep(10)
+        response = requests.get(new_url, headers=headers)
+
+        soup = BeautifulSoup(response.content, "html.parser")
+        release_url_elem = soup.find("a", {"href": local_url})
+
+    review_rating = float(list(release_url_elem.parent.nextSibling.nextSibling.children)[2]["title"][:3]) # getting a float value (e.g. 5.0) out of a "title= '5.00 stars'" atrribute
 
     return review_rating
