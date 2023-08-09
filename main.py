@@ -32,9 +32,7 @@ def parse_ratings(rym_user):
 
 async def get_recent_info(member, rym_user, last, feed_channel):
     ratings = parse_ratings(rym_user)
-
-    print(member.display_name, "parsed.")
-    await asyncio.sleep(60)
+    print(member.display_name, "parsed.\n")
 
     for (text, rym_url, review, timestamp) in ratings:
         if timestamp == last:
@@ -44,6 +42,7 @@ async def get_recent_info(member, rym_user, last, feed_channel):
                                                                                 # ["Rated", "2.5", ""] in case it's a rating
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
+        print(rym_url)
         release_info = get_release_info(rym_url)
 
         if text_info[0][0]:
@@ -52,6 +51,7 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             review = str()
         else:
             user_reviews_url = f"https://rateyourmusic.com/collection/{rym_user}/reviews"
+            await asyncio.sleep(60)
             rating = get_rating_from_review(user_reviews_url, rym_url)
             if rating:
                rated_text = "rated and reviewed"
@@ -89,7 +89,7 @@ async def get_recent_info(member, rym_user, last, feed_channel):
 
         if not(last):
             break
-
+    
     return ratings[0][3]
 
 def main():
@@ -111,6 +111,7 @@ def main():
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 users[user_id]["last"] = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                await asyncio.sleep(60)
 
             with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
