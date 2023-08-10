@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import json
 import re
 from datetime import datetime
@@ -104,13 +105,6 @@ async def get_recent_info(member, rym_user, last, feed_channel):
         }
         rating_info_list.append(rating_info)
 
-        #rating_embed = discord.Embed(title=f"{release_info['artist']} - {release_info['release_title']}{release_year}", description= body_text, color=0x2d5ea9, url= rym_url)
-        #rating_embed.set_author(name= f"{member.display_name} {rated_text}", icon_url= avatar_url, url= user_url)
-        #if release_info['release_cover_url']:
-        #    rating_embed.set_thumbnail(url=release_info['release_cover_url'])
-
-        #await feed_channel.send(embed= rating_embed)
-
         if not(last):
             break
     
@@ -118,6 +112,22 @@ async def get_recent_info(member, rym_user, last, feed_channel):
         "last": ratings[0][3],
         "ratings": rating_info_list
         }
+
+async def send_embeds(users_rating_data, feed_channel, waiting_time):
+    for rating_info_list in users_rating_data:
+        for rating_info in rating_info_list[::-1]:
+            rating_embed = discord.Embed(title=rating_info['title'], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
+            rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
+            if rating_info['thumbnail_url']:
+                rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
+            await feed_channel.send(embed=rating_embed)
+            await asyncio.sleep(waiting_time)
+
+def start_send_embeds(users_rating_data, feed_channel, waiting_time):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(send_embeds(users_rating_data, feed_channel, waiting_time))
+    loop.close()
 
 def main():
     intents = discord.Intents.all()
@@ -127,12 +137,15 @@ def main():
     async def on_ready():
         global users
         print(f'Logged in as {bot.user}.\n')
+        
         feed_channel = bot.get_channel(vars.channel_id)
-
+        
+        send_embeds_thread = None
+        
         while True:
             print(get_current_time_text(), "fetching updates...")
             users_rating_data = list()
-
+            review_counter = 0
             for user_id in list(users):
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
@@ -145,23 +158,20 @@ def main():
                 else:
                     users[user_id]["last"] = rating_data["last"]
                     users_rating_data.append(rating_data["ratings"])
+                    review_counter += len(rating_data["ratings"])
 
                 await asyncio.sleep(60)
-            
-            for rating_info_list in users_rating_data:
-                for rating_info in rating_info_list[::-1]:
-                    rating_embed = discord.Embed(title=rating_info['title'], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
-                    rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
-                    if rating_info['thumbnail_url']:
-                        rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
-                    await feed_channel.send(embed=rating_embed)
-                    await asyncio.sleep(60)
 
             with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
 
-            now = datetime.now()
-            current_time = now.strftime("%H:%M:%S")
+            if send_embeds_thread and send_embeds_thread.is_alive():
+                send_embeds_thread.join()
+            
+            waiting_time = int(review_counter / 150)
+            send_embeds_thread = threading.Thread(target=start_send_embeds, args=(users_rating_data, feed_channel, waiting_time))
+            send_embeds_thread.start()
+
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
 
             await asyncio.sleep(vars.sleep_minutes * 60)
