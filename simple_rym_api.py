@@ -58,21 +58,25 @@ async def get_rating_from_review(user_reviews_url, release_url):
     local_url = re.search("(\/release.+)", release_url).group()
     release_url_elem = soup.find("a", {"href": local_url})
     
-    new_url = user_reviews_url + "/1"
-    page_number = 1
-    max_page = int(soup.find("a", {"class": "navlinknum"}).text)
+    try:
+        max_page = int(soup.find("a", {"class": "navlinknum"}).text)
+    except AttributeError:
+        pass
+    else:
+        new_url = user_reviews_url + "/1"
+        page_number = 1
 
-    while not(release_url_elem):
-        if page_number >= max_page:
-            return None
+        while not(release_url_elem):
+            if page_number >= max_page:
+                return None
 
-        page_number += 1
-        new_url = user_reviews_url + "/" + str(page_number)
-        await asyncio.sleep(10)
-        response = requests.get(new_url, headers=headers)
+            page_number += 1
+            new_url = user_reviews_url + "/" + str(page_number)
+            await asyncio.sleep(10)
+            response = requests.get(new_url, headers=headers)
 
-        soup = BeautifulSoup(response.content, "html.parser")
-        release_url_elem = soup.find("a", {"href": local_url})
+            soup = BeautifulSoup(response.content, "html.parser")
+            release_url_elem = soup.find("a", {"href": local_url})
 
     review_rating = float(list(release_url_elem.parent.nextSibling.nextSibling.children)[2]["title"][:3]) # getting a float value (e.g. 5.0) out of a "title= '5.00 stars'" atrribute
 
