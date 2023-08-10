@@ -22,6 +22,12 @@ def get_current_time_text():
     current_time = now.strftime("%H:%M:%S")
     return "[" + current_time + "]"
 
+def get_review(description_elem):
+    if review_elem := description_elem.find('span'):
+        return ET.tostring(review_elem)[28:-7].decode('utf-8').replace("<br />", "\n").replace("<b>", "**").replace("</b>", "**")
+    else:
+        return None
+
 def parse_ratings(rym_user):
     global users
     url = f"https://rateyourmusic.com/~{rym_user}/data/rss"
@@ -30,7 +36,7 @@ def parse_ratings(rym_user):
     print(rss_response.content)
     parsed_xml = ET.fromstring(rss_response.content)
     children = parsed_xml[0]
-    ratings = [(rating[0].text, rating[1].text, rating[2][0].text, rating[3].text) for rating in children if rating.tag == "item" and "/list/" not in rating[1].text]  # ratings and reviews have the
+    ratings = [(rating[0].text, rating[1].text, get_review(rating[2]), rating[3].text) for rating in children if rating.tag == "item" and "/list/" not in rating[1].text]  # ratings and reviews have the
                                                                                                                                     # <item> tag so i'm filtering
                                                                                                                                     # through the useful information
     return ratings
@@ -38,6 +44,8 @@ def parse_ratings(rym_user):
 async def get_recent_info(member, rym_user, last, feed_channel):
     ratings = parse_ratings(rym_user)
     print(get_current_time_text(), member.display_name, "parsed.\n")
+
+    rating_info_list = list()
 
     for (text, rym_url, review, timestamp) in ratings:
         if timestamp == last:
@@ -85,17 +93,31 @@ async def get_recent_info(member, rym_user, last, feed_channel):
         else:
             release_year = str()
 
-        rating_embed = discord.Embed(title=f"{release_info['artist']} - {release_info['release_title']}{release_year}", description= body_text, color=0x2d5ea9, url= rym_url)
-        rating_embed.set_author(name= f"{member.display_name} {rated_text}", icon_url= avatar_url, url= user_url)
-        if release_info['release_cover_url']:
-            rating_embed.set_thumbnail(url=release_info['release_cover_url'])
+        rating_info = {
+            "title": f"{release_info['artist']} - {release_info['release_title']}{release_year}",
+            "description": body_text,
+            "url": rym_url,
+            "author": f"{member.display_name} {rated_text}",
+            "icon_url": avatar_url,
+            "user_url": user_url,
+            "thumbnail_url": release_info['release_cover_url'] if release_info['release_cover_url'] else None
+        }
+        rating_info_list.append(rating_info)
 
-        await feed_channel.send(embed= rating_embed)
+        #rating_embed = discord.Embed(title=f"{release_info['artist']} - {release_info['release_title']}{release_year}", description= body_text, color=0x2d5ea9, url= rym_url)
+        #rating_embed.set_author(name= f"{member.display_name} {rated_text}", icon_url= avatar_url, url= user_url)
+        #if release_info['release_cover_url']:
+        #    rating_embed.set_thumbnail(url=release_info['release_cover_url'])
+
+        #await feed_channel.send(embed= rating_embed)
 
         if not(last):
             break
     
-    return ratings[0][3]
+    return {
+        "last": ratings[0][3],
+        "ratings": rating_info_list
+        }
 
 def main():
     intents = discord.Intents.all()
@@ -109,12 +131,30 @@ def main():
 
         while True:
             print(get_current_time_text(), "fetching updates...")
+            users_rating_data = list()
 
             for user_id in list(users):
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
-                users[user_id]["last"] = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                try:
+                    rating_data = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                except Exception as e:
+                    with open("errors.log", "a") as error_file:
+                        error_file.write("\n\n" + e.text)
+                    await feed_channel.send(f"Error found while getting rating data. Check log file. <@{vars.whitelisted_ids[-1]}>")
+                else:
+                    users[user_id]["last"] = rating_data["last"]
+                    users_rating_data.append(rating_data["ratings"])
+
                 await asyncio.sleep(60)
+            
+            for rating_info_list in users_rating_data:
+                for rating_info in rating_info_list:
+                    rating_embed = discord.Embed(title=rating_info['title'], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
+                    rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
+                    if rating_info['thumbnail_url']:
+                        rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
+                    await feed_channel.send(embed=rating_embed)
 
             with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
