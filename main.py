@@ -139,8 +139,8 @@ def main():
                 try:
                     rating_data = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                 except Exception as e:
-                    with open("errors.log", "a") as error_file:
-                        error_file.write("\n\n" + e.text)
+                    with open("error.log", "a") as error_file:
+                        error_file.write("\n\n" + str(e))
                     await feed_channel.send(f"Error found while getting rating data. Check log file. <@{vars.whitelisted_ids[-1]}>")
                 else:
                     users[user_id]["last"] = rating_data["last"]
@@ -149,12 +149,13 @@ def main():
                 await asyncio.sleep(60)
             
             for rating_info_list in users_rating_data:
-                for rating_info in rating_info_list:
+                for rating_info in rating_info_list[::-1]:
                     rating_embed = discord.Embed(title=rating_info['title'], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
                     rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
                     if rating_info['thumbnail_url']:
                         rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
                     await feed_channel.send(embed=rating_embed)
+                    await asyncio.sleep(60)
 
             with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
