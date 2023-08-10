@@ -5,3 +5,4 @@ vars.py
 users.json
 start.bat
 error.log
+errors.log
