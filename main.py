@@ -1,7 +1,8 @@
 import asyncio
-import threading
+import random
 import json
 import re
+import traceback
 from datetime import datetime
 import discord
 from discord.ext import commands
@@ -71,7 +72,9 @@ async def get_recent_info(member, rym_user, last, feed_channel):
                rated_text = "rated and reviewed"
             else:
                 rated_text = "reviewed" 
-            review = "--------------\n" + review
+            
+            if review:
+                review = "--------------\n" + review
 
         if rating:
             star_rating = "<:star:1135605958333186149>" * int(rating) + "<:half:1135605972564455434> "  * (1 if rating != int(rating) else 0) # this simply makes a string with star (and half star) emojis corresponding to the user's rating
@@ -113,22 +116,6 @@ async def get_recent_info(member, rym_user, last, feed_channel):
         "ratings": rating_info_list
         }
 
-async def send_embeds(users_rating_data, feed_channel, waiting_time):
-    for rating_info_list in users_rating_data:
-        for rating_info in rating_info_list[::-1]:
-            rating_embed = discord.Embed(title=rating_info['title'], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
-            rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
-            if rating_info['thumbnail_url']:
-                rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
-            await feed_channel.send(embed=rating_embed)
-            await asyncio.sleep(waiting_time)
-
-def start_send_embeds(users_rating_data, feed_channel, waiting_time):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(send_embeds(users_rating_data, feed_channel, waiting_time))
-    loop.close()
-
 def main():
     intents = discord.Intents.all()
     bot = commands.Bot(command_prefix= vars.command_prefix, intents= intents)
@@ -145,32 +132,35 @@ def main():
         while True:
             print(get_current_time_text(), "fetching updates...")
             users_rating_data = list()
-            review_counter = 0
+            rating_counter = 0
             for user_id in list(users):
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
                     rating_data = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
-                except Exception as e:
+                except:
                     with open("error.log", "a") as error_file:
-                        error_file.write("\n\n" + str(e))
+                        error_file.write(traceback.format_exc() + "\n\n")
                     await feed_channel.send(f"Error found while getting rating data. Check log file. <@{vars.whitelisted_ids[-1]}>")
                 else:
                     users[user_id]["last"] = rating_data["last"]
                     users_rating_data.append(rating_data["ratings"])
-                    review_counter += len(rating_data["ratings"])
+                    rating_counter += len(rating_data["ratings"])
 
                 await asyncio.sleep(60)
 
-            with open('users.json', 'w') as users_json:
+            with open('users_temp.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
 
-            if send_embeds_thread and send_embeds_thread.is_alive():
-                send_embeds_thread.join()
-            
-            waiting_time = int(review_counter / 150)
-            send_embeds_thread = threading.Thread(target=start_send_embeds, args=(users_rating_data, feed_channel, waiting_time))
-            send_embeds_thread.start()
+            random.shuffle(users_rating_data)
+            for rating_info_list in users_rating_data:
+                for rating_info in rating_info_list[::-1]:
+                    rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
+                    rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
+                    if rating_info['thumbnail_url']:
+                        rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
+                    await feed_channel.send(embed=rating_embed)
+                    await asyncio.sleep(120)
 
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
 
@@ -194,7 +184,7 @@ def main():
             "last": last
             }
         
-        with open('users.json', 'w') as users_json:
+        with open('users_temp.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         
@@ -218,7 +208,7 @@ def main():
             return
         users.pop(user_id)
 
-        with open('users.json', 'w') as users_json:
+        with open('users_temp.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}) has been successfully removed from the bot.")
@@ -237,7 +227,7 @@ def main():
 
             users[user_id]["last"] = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
 
-            with open('users.json', 'w') as users_json:
+            with open('users_temp.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
 
     @bot.command()
