@@ -75,6 +75,9 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             
             if review:
                 review = "--------------\n" + review
+            else:
+                review = str()
+                rated_text = "rated"
 
         if rating:
             star_rating = "<:star:1135605958333186149>" * int(rating) + "<:half:1135605972564455434> "  * (1 if rating != int(rating) else 0) # this simply makes a string with star (and half star) emojis corresponding to the user's rating
