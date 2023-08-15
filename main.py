@@ -53,12 +53,16 @@ async def get_recent_info(member, rym_user, last, feed_channel):
         if timestamp == last:
             break
 
-        text_info = re.findall(r"(Rated) .* (\d\.\d) stars|(Reviewed)", text)   # text_info will be a list with a structure similar to the following two:
+        text_info = re.findall(r"(Rated) .* (\d\.\d) star|(Reviewed)", text)   # text_info will be a list with a structure similar to the following two:
                                                                                 # ["Rated", "2.5", ""] in case it's a rating
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
         await asyncio.sleep(60)
         print(get_current_time_text(), rym_url)
+
+        if rym_url.startswith("https://rateyourmusic.com/film/"):
+            continue
+        
         release_info = get_release_info(rym_url)
 
         if text_info[0][0]:
@@ -67,7 +71,8 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             review = str()
         else:
             user_reviews_url = f"https://rateyourmusic.com/collection/{rym_user}/reviews"
-            rating = await get_rating_from_review(user_reviews_url, rym_url)
+            rating = await get_rating_from_review(rym_user, rym_url)
+
             if rating:
                rated_text = "rated and reviewed"
             else:
@@ -107,8 +112,10 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             "author": f"{member.display_name} {rated_text}",
             "icon_url": avatar_url,
             "user_url": user_url,
-            "thumbnail_url": release_info['release_cover_url'] if release_info['release_cover_url'] else None
+            "thumbnail_url": release_info['release_cover_url'] if release_info['release_cover_url'] else None,
+            "streaming_links": release_info['release_links']
         }
+
         rating_info_list.append(rating_info)
 
         if not(last):
@@ -162,7 +169,51 @@ def main():
                     rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
                     if rating_info['thumbnail_url']:
                         rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
-                    await feed_channel.send(embed=rating_embed)
+
+                    links_view = discord.ui.View(timeout= None)
+                    print(rating_info["streaming_links"])
+
+                    button_list = [None] * 5
+                    for platform in rating_info["streaming_links"]:
+                        match platform:
+                            case "spotify":
+                                id = next(iter(rating_info["streaming_links"]["spotify"]))
+                                release_link = f"https://open.spotify.com/album/{id}"
+                                platform_emoji = discord.PartialEmoji.from_str("<:sp:1141025089878499389>")
+                                index = 0
+                            case "youtube":
+                                id = next(iter(rating_info["streaming_links"]["youtube"]))
+                                release_link = f"https://www.youtube.com/watch?v={id}"
+                                platform_emoji = discord.PartialEmoji.from_str("<:yc:1140967863931392040>")
+                                index = 1
+                            case "bandcamp":
+                                bandcamp_dict = rating_info["streaming_links"]["bandcamp"]
+                                url = [value["url"] for value in bandcamp_dict.values() if value["url"]][0]
+                                release_link = "https://" + url
+                                platform_emoji = discord.PartialEmoji.from_str("<:bc:1140967203596927017>")
+                                index = 2
+                            case "soundcloud":
+                                soundcloud_dict = rating_info["streaming_links"]["soundcloud"]
+                                url = [value["url"] for value in soundcloud_dict.values() if value["url"]][0]
+                                release_link = "https://" + url
+                                platform_emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")
+                                index = 3
+                            case "applemusic":
+                                id = next(iter(rating_info["streaming_links"]["applemusic"]))
+                                applemusic_values = rating_info["streaming_links"]["applemusic"].values()
+                                (loc, album) = [(value["loc"], value["album"]) for value in applemusic_values][0]
+                                release_link = f"https://music.apple.com/{loc}/album/{album}/{id}"
+                                platform_emoji = discord.PartialEmoji.from_str("<:ac:1140967868708696104>")
+                                index = 4
+                    
+                        if release_link:
+                            button = discord.ui.Button(url= release_link, emoji= platform_emoji)
+                            button_list[index] = button
+                    
+                    for button in button_list:
+                        links_view.add_item(button)
+
+                    await feed_channel.send(embed=rating_embed, view= links_view)
                     await asyncio.sleep(120)
 
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
@@ -195,7 +246,7 @@ def main():
 
         feed_channel = bot.get_channel(vars.channel_id)
 
-        await ctx.send(f"{member.mention} **(RYM username: {rym_user})** has been successfully added to the RYM Updates.")
+        await ctx.send(f"{member.mention} (RYM username: **{rym_user}**) has been successfully added to the bot.")
         await get_recent_info(member, rym_user, "", feed_channel)
     
     @bot.command()
@@ -214,7 +265,7 @@ def main():
         with open('users_temp.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
-        await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}) has been successfully removed from the bot.")
+        await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
 
     
     @bot.command()

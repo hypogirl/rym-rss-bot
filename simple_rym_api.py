@@ -1,6 +1,7 @@
 import requests
 import re
 import asyncio
+import json
 from bs4 import BeautifulSoup
 
 def get_release_info(rym_url):
@@ -10,6 +11,7 @@ def get_release_info(rym_url):
     soup = BeautifulSoup(response.content, "html.parser")
 
     release_title_elem = soup.find("div", {"class": "album_title"})
+    
     try:
         artist_name = list(release_title_elem.find("span", {"class": "credited_name"}).children)[0] # this only works for collaborative albums
     except:
@@ -40,6 +42,12 @@ def get_release_info(rym_url):
         release_year = None
     release_type = re.findall("Type(\w+)", soup.text)[0]
 
+    release_links_elem = soup.find("div", {"id": "media_link_button_container_top"})
+    if release_links_elem:
+        release_links = json.loads(release_links_elem["data-links"])
+    else:
+        release_links = None
+
     return {
         "release_title": release_title_artist[0][0],
         "artist": release_title_artist[0][1],
@@ -47,10 +55,12 @@ def get_release_info(rym_url):
         "secondary_genres": secondary_genres,
         "release_cover_url": release_cover_url,
         "release_year": release_year,
-        "release_type": release_type
+        "release_type": release_type,
+        "release_links": release_links
     }
 
-async def get_rating_from_review(user_reviews_url, release_url):
+async def get_rating_from_review(rym_user, release_url):
+    user_reviews_url = f"https://rateyourmusic.com/collection/{rym_usernme}/reviews,ss.dd"
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
     response = requests.get(user_reviews_url, headers=headers)
 
