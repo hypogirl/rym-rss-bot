@@ -210,9 +210,13 @@ def main():
                             button = discord.ui.Button(url= release_link, emoji= platform_emoji)
                             button_list[index] = button
                     
+                    button_count = 0
                     for button in button_list:
+                        if button_count == 3:
+                            break
                         if button:
                             links_view.add_item(button)
+                            button_count += 1
 
                     await feed_channel.send(embed=rating_embed, view= links_view)
                     await asyncio.sleep(120)
