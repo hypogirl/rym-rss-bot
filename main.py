@@ -211,7 +211,8 @@ def main():
                             button_list[index] = button
                     
                     for button in button_list:
-                        links_view.add_item(button)
+                        if button:
+                            links_view.add_item(button)
 
                     await feed_channel.send(embed=rating_embed, view= links_view)
                     await asyncio.sleep(120)
