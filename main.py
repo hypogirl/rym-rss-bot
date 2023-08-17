@@ -14,10 +14,7 @@ global users
 users = dict()
 
 with open('users.json') as users_json:
-    try:
-        users = json.load(users_json)
-    except json.decoder.JSONDecodeError:
-        pass
+    users = json.load(users_json)
 
 def get_current_time_text():
     now = datetime.now()
@@ -70,7 +67,6 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             rated_text = "rated"
             review = str()
         else:
-            user_reviews_url = f"https://rateyourmusic.com/collection/{rym_user}/reviews"
             rating = await get_rating_from_review(rym_user, rym_url)
 
             if rating:
@@ -129,6 +125,7 @@ async def get_recent_info(member, rym_user, last, feed_channel):
 def main():
     intents = discord.Intents.all()
     bot = commands.Bot(command_prefix= vars.command_prefix, intents= intents)
+    tree = discord.app_commands.CommandTree(bot)
 
     @bot.event
     async def on_ready():
@@ -136,8 +133,6 @@ def main():
         print(f'Logged in as {bot.user}.\n')
         
         feed_channel = bot.get_channel(vars.channel_id)
-        
-        send_embeds_thread = None
         
         while True:
             print(get_current_time_text(), "fetching updates...")
@@ -165,13 +160,13 @@ def main():
             random.shuffle(users_rating_data)
             for rating_info_list in users_rating_data:
                 for rating_info in rating_info_list[::-1]:
+                    print(f"{rating_info['title'][:255]}\n{rating_info['description']}")
                     rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
                     rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
                     if rating_info['thumbnail_url']:
                         rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
 
                     links_view = discord.ui.View(timeout= None)
-                    print(rating_info["streaming_links"])
 
                     button_list = [None] * 5
                     for platform in rating_info["streaming_links"]:
@@ -225,17 +220,10 @@ def main():
 
             await asyncio.sleep(vars.sleep_minutes * 60)
 
-    @bot.command()
-    async def add(ctx, *, arg):
-        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
-            return
-        
+    async def gen_add(rym_user, user_id, sendable):
         global users
 
-        discord_rym_user = re.findall(r"(<@(\d{18})>|\d{18}) +(\w+)", arg)
-        user_id = discord_rym_user[0][1] or discord_rym_user[0][1]
-        rym_user = discord_rym_user[0][2]
-        ratings = parse_ratings(discord_rym_user[0][2])
+        ratings = parse_ratings(rym_user)
         last = ratings[0][3]
 
         users[user_id] = {
@@ -246,14 +234,22 @@ def main():
         with open('users_temp.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
-        
-        member = ctx.guild.get_member(int(user_id))
+        await sendable.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully added to the bot.")
 
-        feed_channel = bot.get_channel(vars.channel_id)
+    @bot.command()
+    async def add(ctx, *, arg):
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+            return
 
-        await ctx.send(f"{member.mention} (RYM username: **{rym_user}**) has been successfully added to the bot.")
-        await get_recent_info(member, rym_user, "", feed_channel)
-    
+        discord_rym_user = re.findall(r"(<@(\d{18})>|\d{18}) +(\w+)", arg)
+        user_id = discord_rym_user[0][1]
+        rym_user = discord_rym_user[0][2]
+        await gen_add(rym_user, user_id, ctx)
+
+    #@tree.command(name = "add")
+    #async def slash_add(interaction, discord_user: str, rym_user: str):
+    #    user_id = re.search(r"\d+", discord_user).group()
+
     @bot.command()
     async def remove(ctx, *, arg):
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
