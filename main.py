@@ -184,7 +184,7 @@ def main():
         
         while True:
             print(get_current_time_text(), "fetching updates...")
-            shuffled_users = list(users).shuffle()
+            shuffled_users = random.shuffle(list(users))
             for user_id in shuffled_users:
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
