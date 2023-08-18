@@ -31,9 +31,15 @@ def get_release_info(rym_url):
 
     #alt_text = re.search('Cover art for (.*)"',response.text).group()[:-1]  # not using anymore
     release_cover_elem = soup.find("img")
-    release_cover_url = "https:" + release_cover_elem["src"]
-    if "https://e.snmc.io/3.0/img/blocked_art/enable_img_600x600.png" in release_cover_url:
+    
+    try:
+        if release_cover_elem["alt"].startswith("Cover art for ") and "https://e.snmc.io/3.0/img/blocked_art/enable_img_600x600.png" not in release_cover_url:
+            release_cover_url = "https:" + release_cover_elem["src"]
+        else:
+            release_cover_url = None
+    except KeyError:
         release_cover_url = None
+    
 
     release_year_proto = re.findall(r"Released\w+ (\d+)|Released\d+ \w+ (\d+)|Released(\d{4})", soup.text)
     if release_year_proto:
