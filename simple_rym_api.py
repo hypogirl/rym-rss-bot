@@ -33,7 +33,7 @@ def get_release_info(rym_url):
     release_cover_elem = soup.find("img")
     
     try:
-        if release_cover_elem["alt"].startswith("Cover art for ") and "https://e.snmc.io/3.0/img/blocked_art/enable_img_600x600.png" not in release_cover_url:
+        if release_cover_elem["alt"].startswith("Cover art for ") and "https://e.snmc.io/3.0/img/blocked_art/enable_img_600x600.png" not in release_cover_elem["src"]:
             release_cover_url = "https:" + release_cover_elem["src"]
         else:
             release_cover_url = None
