@@ -10,8 +10,12 @@ import xml.etree.ElementTree as ET
 import vars
 from simple_rym_api import *
 
-global users
+global users, last, active_id
+last = None
+active_id = None
 users = dict()
+date_format = "%a, %d %b %Y %H:%M:%S %z"
+
 
 with open('users.json') as users_json:
     users = json.load(users_json)
@@ -40,15 +44,23 @@ def parse_ratings(rym_user):
                                                                                                                                     # through the useful information
     return ratings
 
-async def get_recent_info(member, rym_user, last, feed_channel):
+async def get_recent_info(member, rym_user, last_tmp, feed_channel):
     ratings = parse_ratings(rym_user)
     print(get_current_time_text(), member.display_name, "parsed.\n")
 
-    rating_info_list = list()
+    global users, last, active_id
 
+    last = last_tmp
+    active_id = str(member.id)
+
+    i = 0
+    users[active_id]["last"] = ratings[0][3]
+    last_datetime = datetime.strptime(last, date_format)
     for (text, rym_url, review, timestamp) in ratings:
-        if timestamp == last:
+        if datetime.strptime(timestamp, date_format) <= last_datetime:
             break
+
+        i += 1
 
         if rym_url.startswith("https://rateyourmusic.com/film/"):
             continue
@@ -119,51 +131,58 @@ async def get_recent_info(member, rym_user, last, feed_channel):
             rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
 
         links_view = discord.ui.View(timeout= None)
-        button_list = [None] * 5
 
-        for platform in rating_info["streaming_links"]:
-            match platform:
-                case "spotify":
-                    id = next(iter(rating_info["streaming_links"]["spotify"]))
-                    release_link = f"https://open.spotify.com/album/{id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:sp:1141025089878499389>")
-                    index = 0
-                case "youtube":
-                    id = next(iter(rating_info["streaming_links"]["youtube"]))
-                    release_link = f"https://www.youtube.com/watch?v={id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:yc:1140967863931392040>")
-                    index = 1
-                case "bandcamp":
-                    bandcamp_dict = rating_info["streaming_links"]["bandcamp"]
-                    url = [value["url"] for value in bandcamp_dict.values() if value["url"]][0]
-                    release_link = "https://" + url
-                    platform_emoji = discord.PartialEmoji.from_str("<:bc:1140967203596927017>")
-                    index = 2
-                case "soundcloud":
-                    soundcloud_dict = rating_info["streaming_links"]["soundcloud"]
-                    url = [value["url"] for value in soundcloud_dict.values() if value["url"]][0]
-                    release_link = "https://" + url
-                    platform_emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")
-                    index = 3
-                case "applemusic":
-                    id = next(iter(rating_info["streaming_links"]["applemusic"]))
-                    applemusic_values = rating_info["streaming_links"]["applemusic"].values()
-                    (loc, album) = [(value["loc"], value["album"]) for value in applemusic_values][0]
-                    release_link = f"https://music.apple.com/{loc}/album/{album}/{id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:ac:1140967868708696104>")
-                    index = 4
-        
-            if release_link:
-                button = discord.ui.Button(url= release_link, emoji= platform_emoji)
-                button_list[index] = button
-        
-        button_count = 0
-        for button in button_list:
-            if button_count == 3:
-                break
-            if button:
-                links_view.add_item(button)
-                button_count += 1
+        if rating_info["streaming_links"]:
+            button_list = [None] * 5
+            for platform in rating_info["streaming_links"]:
+                release_link = str()
+                match platform:
+                    case "spotify":
+                        id = next(iter(rating_info["streaming_links"]["spotify"]))
+                        release_link = f"https://open.spotify.com/album/{id}"
+                        platform_emoji = discord.PartialEmoji.from_str("<:sp:1141025089878499389>")
+                        index = 0
+                    case "youtube":
+                        id = next(iter(rating_info["streaming_links"]["youtube"]))
+                        release_link = f"https://www.youtube.com/watch?v={id}"
+                        platform_emoji = discord.PartialEmoji.from_str("<:yc:1140967863931392040>")
+                        index = 1
+                    case "bandcamp":
+                        bandcamp_dict = rating_info["streaming_links"]["bandcamp"]
+                        url = [value["url"] for value in bandcamp_dict.values() if value["url"]][0]
+                        release_link = "https://" + url
+                        platform_emoji = discord.PartialEmoji.from_str("<:bc:1140967203596927017>")
+                        index = 2
+                    case "soundcloud":
+                        soundcloud_dict = rating_info["streaming_links"]["soundcloud"]
+                        url = [value["url"] for value in soundcloud_dict.values() if value["url"]][0]
+                        release_link = "https://" + url
+                        platform_emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")
+                        index = 3
+                    case "applemusic":
+                        id = next(iter(rating_info["streaming_links"]["applemusic"]))
+                        applemusic_values = rating_info["streaming_links"]["applemusic"].values()
+                        try:
+                            (loc, album) = [(value["loc"], value["album"]) for value in applemusic_values][0]
+                        except KeyError:
+                            pass
+                        else:
+                            release_link = f"https://music.apple.com/{loc}/album/{album}/{id}"
+                            platform_emoji = discord.PartialEmoji.from_str("<:ac:1140967868708696104>")
+                            index = 4
+            
+                if release_link:
+                    button = discord.ui.Button(url= release_link, emoji= platform_emoji)
+                    button_list[index] = button
+            
+            button_count = 0
+            for button in button_list:
+                if button_count == 3:
+                    break
+                if button:
+                    links_view.add_item(button)
+                    button_count += 1
+
         await feed_channel.send(embed=rating_embed, view= links_view)
 
         if not(last):
@@ -201,7 +220,7 @@ def main():
 
                 await asyncio.sleep(60)
 
-            with open('users_temp.json', 'w') as users_json:
+            with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
                     
 
@@ -220,7 +239,7 @@ def main():
             "last": last
             }
         
-        with open('users_temp.json', 'w') as users_json:
+        with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         await sendable.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully added to the bot.")
@@ -230,7 +249,7 @@ def main():
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
 
-        discord_rym_user = re.findall(r"(<@(\d{18})>|\d{18}) +(\w+)", arg)
+        discord_rym_user = re.findall(r"(<@(\d+)>|\d+) +(\w+)", arg)
         user_id = discord_rym_user[0][1]
         rym_user = discord_rym_user[0][2]
         await gen_add(rym_user, user_id, ctx)
@@ -245,14 +264,14 @@ def main():
             return
         
         global users
-        user_id = re.search(r"<@(\d{18)}>|(\d{18})", arg).group()
+        user_id = re.search(r"<@(\d+)}>|(\d+)", arg).group()
         rym_user = users[user_id]["rym"]
         if user_id not in users:
             await ctx.send(f"This user is not connected to the bot.")
             return
         users.pop(user_id)
 
-        with open('users_temp.json', 'w') as users_json:
+        with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
@@ -271,12 +290,24 @@ def main():
 
             users[user_id]["last"] = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
 
-            with open('users_temp.json', 'w') as users_json:
+            with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
 
     @bot.command()
     async def save(ctx):
         global users
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+            return
+        
+        with open('users.json', 'w') as users_json:
+            users_json.write(json.dumps(users, indent=2))
+        
+        await ctx.reply("Info saved successfully.")
+
+    @bot.command()
+    async def forcesave(ctx):
+        global users, last, active_id
+        last = users[active_id]["last"]
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
@@ -294,7 +325,7 @@ def main():
             await ctx.send(f"Your RYM profile:\nhttps://rateyourmusic.com/~{rym}")
             return
         
-        user_id = re.search(r"<@(\d{18)}>|(\d{18})", arg).group()
+        user_id = re.search(r"<@(\d+)}>|(\d+)", arg).group()
         
         try:
             rym = users[user_id]["rym"]

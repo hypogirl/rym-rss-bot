@@ -15,7 +15,7 @@ def get_release_info(rym_url):
     try:
         artist_name = list(release_title_elem.find("span", {"class": "credited_name"}).children)[0] # this only works for collaborative albums
     except:
-        release_title_artist = re.findall("(.+)\n +\nBy (.+)", release_title_elem.text)
+        release_title_artist = re.findall("(.+)\n *\nBy (.+)", release_title_elem.text)
     else:
         release_title_artist = [(re.findall("(.+)\n +\nBy .+", release_title_elem.text)[0], artist_name)]
 
