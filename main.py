@@ -55,9 +55,8 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 
     i = 0
     users[active_id]["last"] = ratings[0][3]
-    last_datetime = datetime.strptime(last, date_format)
     for (text, rym_url, review, timestamp) in ratings:
-        if datetime.strptime(timestamp, date_format) <= last_datetime:
+        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
             break
 
         i += 1
@@ -70,6 +69,8 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
         await asyncio.sleep(120)
+        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
+            break
         print(get_current_time_text(), rym_url)
         
         release_info = get_release_info(rym_url)
