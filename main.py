@@ -10,7 +10,14 @@ import xml.etree.ElementTree as ET
 import vars
 from simple_rym_api import *
 
+<<<<<<< Updated upstream
 global users
+=======
+global users, last, active_id, remove_users_message
+remove_users_message = dict()
+last = None
+active_id = None
+>>>>>>> Stashed changes
 users = dict()
 
 with open('users.json') as users_json:
@@ -28,7 +35,6 @@ def get_review(description_elem):
         return None
 
 def parse_ratings(rym_user):
-    global users
     url = f"https://rateyourmusic.com/~{rym_user}/data/rss"
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
     rss_response = requests.get(url, headers=headers) # get request using a browser header to avoid a RYM ban
@@ -40,9 +46,19 @@ def parse_ratings(rym_user):
                                                                                                                                     # through the useful information
     return ratings
 
+<<<<<<< Updated upstream
 async def get_recent_info(member, rym_user, last, feed_channel):
+=======
+async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
+    global remove_users_message
+>>>>>>> Stashed changes
     ratings = parse_ratings(rym_user)
-    print(get_current_time_text(), member.display_name, "parsed.\n")
+    try:
+        print(get_current_time_text(), member.display_name, "parsed.\n")
+    except:
+        remove_message = await feed_channel.send(f"<@{user_id}> já nao está no server.")
+        remove_users_message[remove_message.id] = user_id
+        return
 
     rating_info_list = list()
 
@@ -191,7 +207,7 @@ def main():
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
-                    last = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    last = await get_recent_info(user_id, member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                 except:
                     with open("error.log", "a") as error_file:
                         error_file.write(traceback.format_exc() + "\n\n")
@@ -256,6 +272,52 @@ def main():
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
+
+    @bot.command()
+    async def userlist(ctx):
+        user_list_pages = list()
+        user_counter = 1
+        user_list_init = list()
+        for user in users:
+            user_list_init.append((ctx.guild.get_member(int(user)),f"<@{user}>: [{users[user]['rym']}]({'https://rateyourmusic.com/~' + users[user]['rym']})"))
+            user_counter += 1
+
+        user_list_init.sort(key=lambda x: x[0].display_name)
+        user_list_pages = ["\n".join([text for _, text in user_list_init[i:i + 10]]) for i in range(0, len(user_list_init), 10)]
+
+        page_index = 0
+
+        user_list_embed = discord.Embed(title="Users saved in the bot", description=f"{user_list_pages[0]}\n\n**Page 1/{len(user_list_pages)}**", color=0x2d5ea9)
+        userlist_message = await ctx.send(embed=user_list_embed)
+        
+        user_list_view = discord.ui.View(timeout= 300)
+
+        left_button = discord.ui.Button(label="◄")
+        async def left_button_callback(interaction):
+            nonlocal page_index, user_list_embed, userlist_message
+            if page_index > 0:
+                page_index -= 1
+            user_list_embed.description = f"{user_list_pages[page_index]}\n\n**Page {page_index+1}/{len(user_list_pages)}**"
+            await userlist_message.edit(embed=user_list_embed, view= user_list_view)
+            await interaction.response.defer()
+
+        left_button.callback = left_button_callback
+
+        right_button = discord.ui.Button(label="►")
+        async def right_button_callback(interaction):
+            nonlocal page_index, user_list_embed, userlist_message
+            if page_index < len(user_list_pages):
+                page_index += 1
+            user_list_embed.description = f"{user_list_pages[page_index]}\n\n**Page {page_index+1}/{len(user_list_pages)}**"
+            await userlist_message.edit(embed=user_list_embed, view= user_list_view)
+            await interaction.response.defer()
+
+        right_button.callback = right_button_callback
+
+        user_list_view.add_item(left_button)
+        user_list_view.add_item(right_button)
+
+        await userlist_message.edit(embed=user_list_embed, view= user_list_view)
 
     
     @bot.command()
