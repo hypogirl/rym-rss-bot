@@ -8,16 +8,14 @@ import discord
 from discord.ext import commands
 import xml.etree.ElementTree as ET
 import vars
-from simple_rym_api import *
+import requests
+import rympy
+from bs4 import BeautifulSoup
 
-<<<<<<< Updated upstream
-global users
-=======
 global users, last, active_id, remove_users_message
 remove_users_message = dict()
 last = None
 active_id = None
->>>>>>> Stashed changes
 users = dict()
 
 with open('users.json') as users_json:
@@ -46,12 +44,41 @@ def parse_ratings(rym_user):
                                                                                                                                     # through the useful information
     return ratings
 
-<<<<<<< Updated upstream
-async def get_recent_info(member, rym_user, last, feed_channel):
-=======
+async def get_rating_from_review(rym_user, release_url):
+    user_reviews_url = f"https://rateyourmusic.com/collection/{rym_user}/reviews,ss.dd"
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
+    response = requests.get(user_reviews_url, headers=headers)
+
+    soup = BeautifulSoup(response.content, "html.parser")
+    local_url = re.search("(\/release.+)", release_url).group()
+    release_url_elem = soup.find("a", {"href": local_url})
+    
+    try:
+        max_page = int(soup.find("a", {"class": "navlinknum"}).text)
+    except AttributeError:
+        pass
+    else:
+        new_url = user_reviews_url + "/1"
+        page_number = 1
+
+        while not(release_url_elem):
+            if page_number >= max_page:
+                return None
+
+            page_number += 1
+            new_url = user_reviews_url + "/" + str(page_number)
+            await asyncio.sleep(10)
+            response = requests.get(new_url, headers=headers)
+
+            soup = BeautifulSoup(response.content, "html.parser")
+            release_url_elem = soup.find("a", {"href": local_url})
+
+    review_rating = float(list(release_url_elem.parent.nextSibling.nextSibling.children)[2]["title"][:3]) # getting a float value (e.g. 5.0) out of a "title= '5.00 stars'" atrribute
+
+    return review_rating
+
 async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
     global remove_users_message
->>>>>>> Stashed changes
     ratings = parse_ratings(rym_user)
     try:
         print(get_current_time_text(), member.display_name, "parsed.\n")
@@ -76,7 +103,7 @@ async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
         await asyncio.sleep(120)
         print(get_current_time_text(), rym_url)
         
-        release_info = get_release_info(rym_url)
+        release = rympy.Release(url=rym_url)
 
         if text_info[0][0]:
             rating = float(text_info[0][1])
@@ -103,29 +130,29 @@ async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
 
         date = re.search(r"\d{1,2} \w{3}", timestamp).group() # getting the day and month
 
-        if release_info['secondary_genres']:
-            secondary_genres = "*" + release_info["secondary_genres"] + "*"
+        if release.secondary_genres:
+            secondary_genres = "*" + release.secondary_genres + "*"
         else:
             secondary_genres = str()
-        body_text = f"{release_info['primary_genres'] or ''}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
+        body_text = f"{release.primary_genres or ''}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
-        rated_text += (' an ' if release_info['release_type'] in ['Album', 'EP'] else ' a ') + release_info['release_type']
-        if release_info["release_year"]:
-            release_year = "(" + release_info["release_year"] + ")"
+        rated_text += (' an ' if release.type in ['Album', 'EP'] else ' a ') + release.type
+        if release.release_date.year:
+            release_year = "(" + release.release_date.year + ")"
         else:
             release_year = str()
 
         rating_info = {
-            "title": f"{release_info['artist']} - {release_info['release_title']}{release_year}",
+            "title": f"{release.artist_name} - {release.title}{release_year}",
             "description": body_text,
             "url": rym_url,
             "author": f"{member.display_name} {rated_text}",
             "icon_url": avatar_url,
             "user_url": user_url,
-            "thumbnail_url": release_info['release_cover_url'] if release_info['release_cover_url'] else None,
-            "streaming_links": release_info['release_links']
+            "thumbnail_url": release.cover_url,
+            "streaming_links": release.links
         }
 
         rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
@@ -135,44 +162,23 @@ async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
             rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
 
         links_view = discord.ui.View(timeout= None)
-        button_list = [None] * 5
+        button_list = list()
 
-        for platform in rating_info["streaming_links"]:
-            match platform:
-                case "spotify":
-                    id = next(iter(rating_info["streaming_links"]["spotify"]))
-                    release_link = f"https://open.spotify.com/album/{id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:sp:1141025089878499389>")
-                    index = 0
-                case "youtube":
-                    id = next(iter(rating_info["streaming_links"]["youtube"]))
-                    release_link = f"https://www.youtube.com/watch?v={id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:yc:1140967863931392040>")
-                    index = 1
-                case "bandcamp":
-                    bandcamp_dict = rating_info["streaming_links"]["bandcamp"]
-                    url = [value["url"] for value in bandcamp_dict.values() if value["url"]][0]
-                    release_link = "https://" + url
-                    platform_emoji = discord.PartialEmoji.from_str("<:bc:1140967203596927017>")
-                    index = 2
-                case "soundcloud":
-                    soundcloud_dict = rating_info["streaming_links"]["soundcloud"]
-                    url = [value["url"] for value in soundcloud_dict.values() if value["url"]][0]
-                    release_link = "https://" + url
-                    platform_emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")
-                    index = 3
-                case "applemusic":
-                    id = next(iter(rating_info["streaming_links"]["applemusic"]))
-                    applemusic_values = rating_info["streaming_links"]["applemusic"].values()
-                    (loc, album) = [(value["loc"], value["album"]) for value in applemusic_values][0]
-                    release_link = f"https://music.apple.com/{loc}/album/{album}/{id}"
-                    platform_emoji = discord.PartialEmoji.from_str("<:ac:1140967868708696104>")
-                    index = 4
+        if release.links.spotify:
+            button_list.append(discord.ui.Button(url= release.links.spotify, emoji= discord.PartialEmoji.from_str("<:sp:1141025089878499389>")))
+
+        if release.links.youtube:
+            button_list.append(discord.ui.Button(url= release.links.youtube, emoji= discord.PartialEmoji.from_str("<:yc:1140967863931392040>")))
         
-            if release_link:
-                button = discord.ui.Button(url= release_link, emoji= platform_emoji)
-                button_list[index] = button
+        if release.links.bandcamp:
+            button_list.append(discord.ui.Button(url= release.links.bandcamp, emoji= discord.PartialEmoji.from_str("<:bc:1140967203596927017>")))
         
+        if release.links.soundcloud:
+            button_list.append(discord.ui.Button(url= release.links.soundcloud, emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")))
+        
+        if release.links.apple_music:
+            button_list.append(discord.ui.Button(url= release.links.apple_music, emoji= discord.PartialEmoji.from_str("<:ac:1140967868708696104>")))
+
         button_count = 0
         for button in button_list:
             if button_count == 3:
