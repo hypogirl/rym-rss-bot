@@ -12,11 +12,11 @@ import requests
 import rympy
 from bs4 import BeautifulSoup
 
-global users, last, active_id, remove_users_message
-remove_users_message = dict()
+global users, last, active_id
 last = None
 active_id = None
 users = dict()
+date_format = "%a, %d %b %Y %H:%M:%S %z"
 
 with open('users.json') as users_json:
     users = json.load(users_json)
@@ -77,21 +77,22 @@ async def get_rating_from_review(rym_user, release_url):
 
     return review_rating
 
-async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
-    global remove_users_message
+async def get_recent_info(member, rym_user, last_tmp, feed_channel):
     ratings = parse_ratings(rym_user)
-    try:
-        print(get_current_time_text(), member.display_name, "parsed.\n")
-    except:
-        remove_message = await feed_channel.send(f"<@{user_id}> já nao está no server.")
-        remove_users_message[remove_message.id] = user_id
-        return
+    print(get_current_time_text(), member.display_name, "parsed.\n")
 
-    rating_info_list = list()
+    global users, last, active_id
 
+    last = last_tmp
+    active_id = str(member.id)
+
+    i = 0
+    users[active_id]["last"] = ratings[0][3]
     for (text, rym_url, review, timestamp) in ratings:
-        if timestamp == last:
+        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
             break
+
+        i += 1
 
         if rym_url.startswith("https://rateyourmusic.com/film/"):
             continue
@@ -101,6 +102,8 @@ async def get_recent_info(user_id, member, rym_user, last_tmp, feed_channel):
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
         await asyncio.sleep(120)
+        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
+            break
         print(get_current_time_text(), rym_url)
         
         release = rympy.Release(url=rym_url)
@@ -341,6 +344,18 @@ def main():
 
             with open('users_temp.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
+
+    @bot.command()
+    async def forcesave(ctx):
+        global users, last, active_id
+        last = users[active_id]["last"]
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+            return
+        
+        with open('users.json', 'w') as users_json:
+            users_json.write(json.dumps(users, indent=2))
+        
+        await ctx.reply("Info saved successfully.")
 
     @bot.command()
     async def save(ctx):
