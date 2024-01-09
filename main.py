@@ -28,7 +28,7 @@ def get_current_time_text():
 
 def get_review(description_elem):
     if review_elem := description_elem.find('span'):
-        return ET.tostring(review_elem)[28:-7].decode('utf-8').replace("<br />", "\n").replace("<b>", "**").replace("</b>", "**")
+        return review_elem.text.strip()
     else:
         return None
 
@@ -134,16 +134,16 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         date = re.search(r"\d{1,2} \w{3}", timestamp).group() # getting the day and month
 
         if release.secondary_genres:
-            secondary_genres = "*" + release.secondary_genres + "*"
+            secondary_genres = "*" + ", ".join([genre.name for genre in release.secondary_genres]) + "*"
         else:
             secondary_genres = str()
-        body_text = f"{release.primary_genres or ''}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
+        body_text = f"{', '.join([genre.name for genre in release.primary_genres]) or ''}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
         rated_text += (' an ' if release.type in ['Album', 'EP'] else ' a ') + release.type
         if release.release_date.year:
-            release_year = "(" + release.release_date.year + ")"
+            release_year = f"({release.release_date.year})"
         else:
             release_year = str()
 
@@ -216,7 +216,7 @@ def main():
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
-                    last = await get_recent_info(user_id, member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    last = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                 except:
                     with open("error.log", "a") as error_file:
                         error_file.write(traceback.format_exc() + "\n\n")
@@ -281,6 +281,11 @@ def main():
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
+
+    @bot.command()
+    async def genre(ctx, *, arg):
+        genre_obj = rympy.Genre(name=arg)
+        await ctx.reply(genre_obj.short_description)
 
     @bot.command()
     async def userlist(ctx):
