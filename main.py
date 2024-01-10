@@ -11,15 +11,20 @@ import vars
 import requests
 import rympy
 from bs4 import BeautifulSoup
+import subprocess
 
-global users, last, active_id
+global users, last, active_id, last_url
 last = None
 active_id = None
 users = dict()
+cache = dict()
 date_format = "%a, %d %b %Y %H:%M:%S %z"
 
 with open('users.json') as users_json:
     users = json.load(users_json)
+
+with open('cache.json') as cache_json:
+    cache = json.load(cache_json)
 
 def get_current_time_text():
     now = datetime.now()
@@ -81,7 +86,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
     ratings = parse_ratings(rym_user)
     print(get_current_time_text(), member.display_name, "parsed.\n")
 
-    global users, last, active_id
+    global users, last, active_id, last_url
 
     last = last_tmp
     active_id = str(member.id)
@@ -106,6 +111,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             break
         print(get_current_time_text(), rym_url)
         
+        last_url = rym_url
         release = rympy.Release(url=rym_url)
 
         if text_info[0][0]:
@@ -137,7 +143,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             secondary_genres = "*" + ", ".join([genre.name for genre in release.secondary_genres]) + "*"
         else:
             secondary_genres = str()
-        body_text = f"{', '.join([genre.name for genre in release.primary_genres]) or ''}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
+        body_text = f"{', '.join([genre.name for genre in release.primary_genres])}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
@@ -148,7 +154,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             release_year = str()
 
         rating_info = {
-            "title": f"{release.artist_name} - {release.title}{release_year}",
+            "title": f"{release.artist_name} - {release.title} {release_year}",
             "description": body_text,
             "url": rym_url,
             "author": f"{member.display_name} {rated_text}",
@@ -202,7 +208,7 @@ def main():
 
     @bot.event
     async def on_ready():
-        global users
+        global users, last_url
         print(f'Logged in as {bot.user}.\n')
         
         feed_channel = bot.get_channel(vars.channel_id)
@@ -219,7 +225,7 @@ def main():
                     last = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                 except:
                     with open("error.log", "a") as error_file:
-                        error_file.write(traceback.format_exc() + "\n\n")
+                        error_file.write(last_url + "\n" + traceback.format_exc() + "\n\n")
                     await feed_channel.send(f"Error found while getting rating data. Check log file. <@{vars.whitelisted_ids[-1]}>")
                 else:
                     users[user_id]["last"] = last
@@ -282,10 +288,12 @@ def main():
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
 
-    @bot.command()
+    '''    @bot.command()
     async def genre(ctx, *, arg):
+        if arg.replace(" ","").lower() in cache["genres"]:
+
         genre_obj = rympy.Genre(name=arg)
-        await ctx.reply(genre_obj.short_description)
+        await ctx.reply(genre_obj.short_description)'''
 
     @bot.command()
     async def userlist(ctx):
