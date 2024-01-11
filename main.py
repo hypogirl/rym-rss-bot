@@ -1,6 +1,7 @@
 import asyncio
 import random
 import json
+import pickle
 import re
 import traceback
 from datetime import datetime
@@ -11,7 +12,6 @@ import vars
 import requests
 import rympy
 from bs4 import BeautifulSoup
-import subprocess
 
 global users, last, active_id, last_url
 last = None
@@ -23,8 +23,8 @@ date_format = "%a, %d %b %Y %H:%M:%S %z"
 with open('users.json') as users_json:
     users = json.load(users_json)
 
-with open('cache.json') as cache_json:
-    cache = json.load(cache_json)
+with open('cache.pkl', 'rb') as file:
+    cache = pickle.load(file)
 
 def get_current_time_text():
     now = datetime.now()
@@ -86,7 +86,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
     ratings = parse_ratings(rym_user)
     print(get_current_time_text(), member.display_name, "parsed.\n")
 
-    global users, last, active_id, last_url
+    global users, last, active_id, last_url, cache
 
     last = last_tmp
     active_id = str(member.id)
@@ -112,7 +112,13 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         print(get_current_time_text(), rym_url)
         
         last_url = rym_url
-        release = rympy.Release(url=rym_url)
+        if cache.get("releases") and rym_url in cache["releases"]:
+            release = cache["releases"][rym_url]
+        else:
+            release = rympy.Release(rym_url)
+            if not cache.get("releases"):
+                cache["releases"] = dict()
+            cache["releases"][rym_url] = release
 
         if text_info[0][0]:
             rating = float(text_info[0][1])
@@ -237,6 +243,10 @@ def main():
                     
 
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
+            
+            global cache
+            with open('cache.pkl', 'wb') as file:
+                pickle.dump(cache, file)
 
             await asyncio.sleep(vars.sleep_minutes * 60)
 
@@ -288,12 +298,89 @@ def main():
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
 
-    '''    @bot.command()
+    @bot.command()
     async def genre(ctx, *, arg):
-        if arg.replace(" ","").lower() in cache["genres"]:
+        global cache
+        fixed_genre_name = arg.replace(" ","-").lower()
+        if cache.get("genres") and fixed_genre_name in cache.get("genres"):
+            genre_obj = cache["genres"][fixed_genre_name]
+        else:
+            genre_obj = rympy.Genre(name=arg)
+            if not cache.get("genres"):
+                cache["genres"] = dict()
+            cache["genres"][fixed_genre_name] = genre_obj
 
-        genre_obj = rympy.Genre(name=arg)
-        await ctx.reply(genre_obj.short_description)'''
+        genre_embed = discord.Embed(title=genre_obj.name, description=genre_obj.short_description, color=0x2d5ea9)
+        genre_message = await ctx.send(embed=genre_embed)
+
+        genre_init_view = discord.ui.View(timeout= 300)
+        expanded_view = discord.ui.View(timeout= 300)
+        top_view = discord.ui.View(timeout= 300)
+        top_albums_str = str()
+        n = "\n"
+        for i, album in enumerate(genre_obj.top_ten_albums):
+            top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
+
+        top_embed = discord.Embed(title=f"Top 10 {genre_obj.name} albums", description=top_albums_str, color=0x2d5ea9)
+
+        expand_button = discord.ui.Button(label="Expand")
+        expand_index = 0
+        description_by_words = genre_obj.description.split(" ")
+        description_pages = [" ".join([text for text in description_by_words[i:i + 200]]) for i in range(0, len(description_by_words), 200)]
+        expanded_embed = discord.Embed(title=genre_obj.name, description=f"{description_pages[0]}\n\n**Page 1/{len(description_pages)}**", color=0x2d5ea9)
+        async def expand_button_callback(interaction):
+            nonlocal genre_message, expanded_embed, expanded_view
+            await genre_message.edit(embed=expanded_embed, view= expanded_view)
+            await interaction.response.defer()
+
+        expand_button.callback = expand_button_callback
+
+        top_albums_button = discord.ui.Button(label="Top 10 Albums")
+        async def top_albums_button_callback(interaction):
+            nonlocal genre_message, top_embed, top_view
+            await genre_message.edit(embed=top_embed, view= top_view)
+            await interaction.response.defer()
+
+        top_albums_button.callback = top_albums_button_callback
+
+        init_button = discord.ui.Button(label="Short description")
+        async def compact_button_callback(interaction):
+            nonlocal genre_message, genre_init_view, genre_embed
+            await genre_message.edit(embed=genre_embed, view= genre_init_view)
+            await interaction.response.defer()
+
+        init_button.callback = compact_button_callback
+
+        left_button = discord.ui.Button(label="◄")
+        async def left_button_callback(interaction):
+            nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
+            if expand_index > 0:
+                expand_index -= 1
+            expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
+            await genre_message.edit(embed=expanded_embed, view= expanded_view)
+            await interaction.response.defer()
+
+        left_button.callback = left_button_callback
+
+        right_button = discord.ui.Button(label="►")
+        async def right_button_callback(interaction):
+            nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
+            if expand_index < len(description_pages) - 1:
+                expand_index += 1
+            expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
+            await genre_message.edit(embed=expanded_embed, view= expanded_view)
+            await interaction.response.defer()
+
+        right_button.callback = right_button_callback
+
+        genre_init_view.add_item(expand_button)
+        genre_init_view.add_item(top_albums_button)
+        expanded_view.add_item(init_button)
+        expanded_view.add_item(left_button)
+        expanded_view.add_item(right_button)
+        top_view.add_item(init_button)
+
+        await genre_message.edit(embed=genre_embed, view= genre_init_view)
 
     @bot.command()
     async def userlist(ctx):
@@ -328,7 +415,7 @@ def main():
         right_button = discord.ui.Button(label="►")
         async def right_button_callback(interaction):
             nonlocal page_index, user_list_embed, userlist_message
-            if page_index < len(user_list_pages):
+            if page_index < len(user_list_pages) - 1:
                 page_index += 1
             user_list_embed.description = f"{user_list_pages[page_index]}\n\n**Page {page_index+1}/{len(user_list_pages)}**"
             await userlist_message.edit(embed=user_list_embed, view= user_list_view)
@@ -372,12 +459,15 @@ def main():
 
     @bot.command()
     async def save(ctx):
-        global users
+        global users, cache
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
         
         with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
+
+        with open('cache.pkl', 'wb') as file:
+            pickle.dump(cache, file)
         
         await ctx.reply("Info saved successfully.")
 
