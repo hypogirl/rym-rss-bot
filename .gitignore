@@ -7,3 +7,4 @@ start.bat
 error.log
 errors.log
 users_temp.json
+*.pkl
