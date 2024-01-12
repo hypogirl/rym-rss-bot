@@ -2,6 +2,7 @@ import asyncio
 import random
 import json
 import pickle
+import lzma
 import re
 import traceback
 from datetime import datetime
@@ -23,7 +24,7 @@ date_format = "%a, %d %b %Y %H:%M:%S %z"
 with open('users.json') as users_json:
     users = json.load(users_json)
 
-with open('cache.pkl', 'rb') as file:
+with lzma.open('cache.lzma', 'rb') as file:
     cache = pickle.load(file)
 
 def get_current_time_text():
@@ -455,6 +456,9 @@ def main():
         with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
         
+        with lzma.open('cache.lzma', 'wb') as file:
+            pickle.dump(cache, file)
+        
         await ctx.reply("Info saved successfully.")
 
     @bot.command()
@@ -466,7 +470,7 @@ def main():
         with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
-        with open('cache.pkl', 'wb') as file:
+        with lzma.open('cache.lzma', 'wb') as file:
             pickle.dump(cache, file)
         
         await ctx.reply("Info saved successfully.")
