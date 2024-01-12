@@ -146,11 +146,14 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 
         date = re.search(r"\d{1,2} \w{3}", timestamp).group() # getting the day and month
 
+        if release.primary_genres:
+            primary_genres = ", ".join([genre.name for genre in release.primary_genres])
+
         if release.secondary_genres:
             secondary_genres = "*" + ", ".join([genre.name for genre in release.secondary_genres]) + "*"
         else:
             secondary_genres = str()
-        body_text = f"{', '.join([genre.name for genre in release.primary_genres])}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
+        body_text = f"{primary_genres}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
