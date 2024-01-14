@@ -26,6 +26,10 @@ with open('users.json') as users_json:
 
 with lzma.open('cache.lzma', 'rb') as file:
     cache = pickle.load(file)
+    if cache.get("simple_releases"):
+        for release in cache.get("simple_releases"):
+            if release in cache.get("releases"):
+                cache["simple_releases"].pop(release)
 
 def get_current_time_text():
     now = datetime.now()
@@ -249,7 +253,7 @@ def main():
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
             
             global cache
-            with open('cache.pkl', 'wb') as file:
+            with lzma.open('cache.lzma', 'wb') as file:
                 pickle.dump(cache, file)
 
             await asyncio.sleep(vars.sleep_minutes * 60)
@@ -305,86 +309,227 @@ def main():
     @bot.command()
     async def genre(ctx, *, arg):
         global cache
-        fixed_genre_name = arg.replace(" ","-").lower()
-        if cache.get("genres") and fixed_genre_name in cache.get("genres"):
-            genre_obj = cache["genres"][fixed_genre_name]
-        else:
-            genre_obj = rympy.Genre(name=arg)
-            if not cache.get("genres"):
-                cache["genres"] = dict()
-            cache["genres"][fixed_genre_name] = genre_obj
+        fixed_genre_name = str().join(char for char in arg.replace(" ","-").lower() if char == "-" or char.isalpha())
+        cached_flag = False
+        try:
+            if cache.get("genres") and fixed_genre_name in cache.get("genres"):
+                genre_obj = cache["genres"][fixed_genre_name]
+                cached_flag = True
+            else:
+                genre_obj = rympy.Genre(name=arg)
+                if not cache.get("genres"):
+                    cache["genres"] = dict()
+                cache["genres"][fixed_genre_name] = genre_obj
 
-        genre_embed = discord.Embed(title=genre_obj.name, description=genre_obj.short_description, color=0x2d5ea9)
-        genre_message = await ctx.send(embed=genre_embed)
+            genre_embed = discord.Embed(title=genre_obj.name, description=genre_obj.short_description, color=0x2d5ea9)
+            
+            if cached_flag:
+                genre_message = await ctx.send(embed=genre_embed)
+            else:
+                genre_message = await ctx.reply(embed=genre_embed)
 
-        genre_init_view = discord.ui.View(timeout= 300)
-        expanded_view = discord.ui.View(timeout= 300)
-        top_view = discord.ui.View(timeout= 300)
-        top_albums_str = str()
-        n = "\n"
-        for i, album in enumerate(genre_obj.top_ten_albums):
-            top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
+            genre_init_view = discord.ui.View(timeout= 300)
 
-        top_embed = discord.Embed(title=f"Top 10 {genre_obj.name} albums", description=top_albums_str, color=0x2d5ea9)
+            init_button = discord.ui.Button(label="← Back")
+            async def compact_button_callback(interaction):
+                nonlocal genre_message, genre_init_view, genre_embed
+                await genre_message.edit(embed=genre_embed, view= genre_init_view)
+                await interaction.response.defer()
+            init_button.callback = compact_button_callback
 
-        expand_button = discord.ui.Button(label="Expand")
-        expand_index = 0
-        description_by_words = genre_obj.description.split(" ")
-        description_pages = [" ".join([text for text in description_by_words[i:i + 200]]) for i in range(0, len(description_by_words), 200)]
-        expanded_embed = discord.Embed(title=genre_obj.name, description=f"{description_pages[0]}\n\n**Page 1/{len(description_pages)}**", color=0x2d5ea9)
-        async def expand_button_callback(interaction):
-            nonlocal genre_message, expanded_embed, expanded_view
-            await genre_message.edit(embed=expanded_embed, view= expanded_view)
-            await interaction.response.defer()
+            #expand
+            expanded_view = discord.ui.View(timeout= 300)
+            expand_index = 0
+            description_by_paragraphs = genre_obj.description.split("\n\n")
+            word_counter = 0
+            description_pages = list()
+            temp_text = str()
 
-        expand_button.callback = expand_button_callback
+            for paragraph in description_by_paragraphs:
+                word_counter += len(paragraph.split())
+                if word_counter > 200:
+                    description_pages.append(temp_text)
+                    temp_text = paragraph
+                    word_counter = len(paragraph.split())
+                else:
+                    temp_text += "\n\n" + paragraph
+            description_pages.append(temp_text)
 
-        top_albums_button = discord.ui.Button(label="Top 10 Albums")
-        async def top_albums_button_callback(interaction):
-            nonlocal genre_message, top_embed, top_view
-            await genre_message.edit(embed=top_embed, view= top_view)
-            await interaction.response.defer()
+            expanded_embed = discord.Embed(title=genre_obj.name, description=f"{description_pages[0]}\n\n**Page 1/{len(description_pages)}**", color=0x2d5ea9)
 
-        top_albums_button.callback = top_albums_button_callback
+            expand_button = discord.ui.Button(label="Expand")
+            async def expand_button_callback(interaction):
+                nonlocal genre_message, expanded_embed, expanded_view
+                await genre_message.edit(embed=expanded_embed, view= expanded_view)
+                await interaction.response.defer()
+            expand_button.callback = expand_button_callback
 
-        init_button = discord.ui.Button(label="Short description")
-        async def compact_button_callback(interaction):
-            nonlocal genre_message, genre_init_view, genre_embed
+            #top 10
+            top_view = discord.ui.View(timeout= 300)
+            top_view.add_item(init_button)
+            top_albums_button = discord.ui.Button(label="Top 10 Albums")
+            top_albums_str = str()
+            n = "\n"
+            if len(genre_obj.top_ten_albums):
+                for i, album in enumerate(genre_obj.top_ten_albums):
+                    top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
+            else:
+                force_load_button = discord.ui.Button(label="Load list")
+                async def force_load_button_callback(interaction):
+                    nonlocal genre_message, top_embed, top_albums_str
+                    top_embed.description = "Fetching top albums from RYM..."
+                    await genre_message.edit(embed=top_embed, view=top_view)
+                    chart = genre_obj.top_chart
+                    top_ten = chart.entries[:10]
+                    for i, album in enumerate(top_ten):
+                        top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
+                    
+                    top_embed.description = top_albums_str
+                    await genre_message.edit(embed=top_embed, view=top_view)
+                    
+                    await interaction.response.defer()
+
+                force_load_button.callback = force_load_button_callback
+                top_view.add_item(force_load_button)
+
+
+            top_embed = discord.Embed(title=f"Top 10 {genre_obj.name} albums", description=top_albums_str, color=0x2d5ea9)
+            async def top_albums_button_callback(interaction):
+                nonlocal genre_message, top_embed, top_view
+                await genre_message.edit(embed=top_embed, view= top_view)
+                await interaction.response.defer()
+            top_albums_button.callback = top_albums_button_callback
+            
+            bold_ascii_alphabet = {
+                ' ': ' ',
+                'a': '𝐴',
+                'b': '𝐵',
+                'c': '𝐶',
+                'd': '𝐷',
+                'e': '𝐸',
+                'f': '𝐹',
+                'g': '𝐺',
+                'h': '𝐻',
+                'i': '𝐼',
+                'j': '𝐽',
+                'k': '𝐾',
+                'l': '𝐿',
+                'm': '𝑀',
+                'n': '𝑁',
+                'o': '𝑂',
+                'p': '𝑃',
+                'q': '𝑄',
+                'r': '𝑅',
+                's': '𝑆',
+                't': '𝑇',
+                'u': '𝑈',
+                'v': '𝑉',
+                'w': '𝑊',
+                'x': '𝑋',
+                'y': '𝑌',
+                'z': '𝑍',
+            }
+            
+            hierarchy_genre_buttons = list()
+            parent_genres_view = None
+            if genre_obj.parent_genres:
+                #parent genres
+                parent_genres_view = discord.ui.View(timeout= 300)
+                parent_genres_button = discord.ui.Button(label="Parent genres")
+                parent_genre_formatted_description = str().join(parent_genre.name + "\n|\n" for parent_genre in genre_obj.parent_genres) + f"└-- {str().join(bold_ascii_alphabet[letter.lower()] for letter in genre_obj.name)}"
+                parent_genres_embed = discord.Embed(title=f"{genre_obj.name} parent genre hierarchy", description=f"```\n{parent_genre_formatted_description}```")
+                async def parent_genres_button_callback(interaction):
+                    nonlocal genre_message, parent_genres_embed, parent_genres_view
+                    await genre_message.edit(embed=parent_genres_embed, view= parent_genres_view)
+                    await interaction.response.defer()
+                parent_genres_button.callback = parent_genres_button_callback
+                hierarchy_genre_buttons.append(parent_genres_button)
+                
+            #children genres
+            children_genres_view = None
+            if genre_obj.children_genres:
+                children_genres_view = discord.ui.View(timeout= 300)
+                children_genres_button = discord.ui.Button(label="Children genres")
+                children_genre_formatted_description = f"**{genre_obj.name}**"
+                def recursive_children_search(space_count, children_genres):
+                    description_fragment = str()
+                    if children_genres:
+                        for child in children_genres:
+                            description_fragment +=  " "*space_count + "\n" + " "*space_count + "|\n" + " "*space_count + f"└-- {child.name}"
+                            fixed_name = str().join(char for char in child.name.replace(" ","-").lower() if char == "-" or char.isalpha())
+                            if fixed_name in cache["genres"]:
+                                description_fragment += recursive_children_search(space_count+4,cache["genres"][fixed_name].children_genres)
+                    return description_fragment
+                children_genre_formatted_description = str().join(bold_ascii_alphabet[letter.lower()] for letter in genre_obj.name)
+                children_genre_formatted_description += recursive_children_search(0, genre_obj.children_genres)
+                children_genre_formatted_split = children_genre_formatted_description.split("\n")
+                children_genre_formatted_pages = ["```\n" + "\n".join(children_genre_formatted_split[i:i+14]) + "```" for i in range(0,len(children_genre_formatted_split),14)]
+
+                children_genres_embed = discord.Embed(title=f"{genre_obj.name} children genre hierarchy", description=f"{children_genre_formatted_pages[0]}\nPage 1/{len(children_genre_formatted_pages)}")
+                async def children_genres_button_callback(interaction):
+                    nonlocal genre_message, children_genres_embed, children_genres_view
+                    await genre_message.edit(embed=children_genres_embed, view= children_genres_view)
+                    await interaction.response.defer()
+                children_genres_button.callback = children_genres_button_callback
+                hierarchy_genre_buttons.append(children_genres_button)
+                hierarchy_index = 0
+                left_button_child = discord.ui.Button(label="◄")
+                async def left_button_callback(interaction):
+                    nonlocal hierarchy_index, children_genre_formatted_pages, children_genres_embed, genre_message, children_genres_view
+                    if hierarchy_index > 0:
+                        hierarchy_index -= 1
+                    children_genres_embed.description = f"{children_genre_formatted_pages[hierarchy_index]}\n\n**Page {hierarchy_index+1}/{len(children_genre_formatted_pages)}**"
+                    await genre_message.edit(embed=children_genres_embed, view= children_genres_view)
+                    await interaction.response.defer()
+                left_button_child.callback = left_button_callback
+
+                right_button_child = discord.ui.Button(label="►")
+                async def right_button_callback(interaction):
+                    nonlocal hierarchy_index, children_genre_formatted_pages, children_genres_embed, genre_message, children_genres_view
+                    if hierarchy_index < len(children_genre_formatted_pages) - 1:
+                        hierarchy_index += 1
+                    children_genres_embed.description = f"{children_genre_formatted_pages[hierarchy_index]}\n\n**Page {hierarchy_index+1}/{len(children_genre_formatted_pages)}**"
+                    await genre_message.edit(embed=children_genres_embed, view= children_genres_view)
+                    await interaction.response.defer()
+                right_button_child.callback = right_button_callback
+
+            left_button = discord.ui.Button(label="◄")
+            async def left_button_callback(interaction):
+                nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
+                if expand_index > 0:
+                    expand_index -= 1
+                expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
+                await genre_message.edit(embed=expanded_embed, view= expanded_view)
+                await interaction.response.defer()
+            left_button.callback = left_button_callback
+
+            right_button = discord.ui.Button(label="►")
+            async def right_button_callback(interaction):
+                nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
+                if expand_index < len(description_pages) - 1:
+                    expand_index += 1
+                expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
+                await genre_message.edit(embed=expanded_embed, view= expanded_view)
+                await interaction.response.defer()
+            right_button.callback = right_button_callback
+
+            genre_init_view.add_item(expand_button)
+            genre_init_view.add_item(top_albums_button)
+            for button in hierarchy_genre_buttons:
+                genre_init_view.add_item(button)
+            if parent_genres_view:
+                parent_genres_view.add_item(init_button)
+            if children_genres_view:
+                children_genres_view.add_item(init_button)
+                children_genres_view.add_item(left_button_child)
+                children_genres_view.add_item(right_button_child)
+            expanded_view.add_item(init_button)
+            expanded_view.add_item(left_button)
+            expanded_view.add_item(right_button)
+
             await genre_message.edit(embed=genre_embed, view= genre_init_view)
-            await interaction.response.defer()
-
-        init_button.callback = compact_button_callback
-
-        left_button = discord.ui.Button(label="◄")
-        async def left_button_callback(interaction):
-            nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
-            if expand_index > 0:
-                expand_index -= 1
-            expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
-            await genre_message.edit(embed=expanded_embed, view= expanded_view)
-            await interaction.response.defer()
-
-        left_button.callback = left_button_callback
-
-        right_button = discord.ui.Button(label="►")
-        async def right_button_callback(interaction):
-            nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
-            if expand_index < len(description_pages) - 1:
-                expand_index += 1
-            expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
-            await genre_message.edit(embed=expanded_embed, view= expanded_view)
-            await interaction.response.defer()
-
-        right_button.callback = right_button_callback
-
-        genre_init_view.add_item(expand_button)
-        genre_init_view.add_item(top_albums_button)
-        expanded_view.add_item(init_button)
-        expanded_view.add_item(left_button)
-        expanded_view.add_item(right_button)
-        top_view.add_item(init_button)
-
-        await genre_message.edit(embed=genre_embed, view= genre_init_view)
+        except rympy.RequestFailed:
+            await ctx.send("The requested genre doesn't exist.")
 
     @bot.command()
     async def userlist(ctx):
