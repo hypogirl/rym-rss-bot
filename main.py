@@ -162,7 +162,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
         rated_text += (' an ' if release.type in ['Album', 'EP'] else ' a ') + release.type
-        if release.release_date.year:
+        if release.release_date and release.release_date.year:
             release_year = f"({release.release_date.year})"
         else:
             release_year = str()
@@ -262,7 +262,7 @@ def main():
         global users
 
         ratings = parse_ratings(rym_user)
-        last = ratings[0][3]
+        last = ratings[0][3] if ratings[0][3] else None
 
         users[user_id] = {
             "rym": rym_user,
@@ -279,7 +279,7 @@ def main():
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
             return
 
-        discord_rym_user = re.findall(r"(<@(\d{18})>|\d{18}) +(\w+)", arg)
+        discord_rym_user = re.findall(r"(<@(\d+)>|\d+) +(\w+)", arg)
         user_id = discord_rym_user[0][1]
         rym_user = discord_rym_user[0][2]
         await gen_add(rym_user, user_id, ctx)
@@ -376,7 +376,7 @@ def main():
             else:
                 force_load_button = discord.ui.Button(label="Load list")
                 async def force_load_button_callback(interaction):
-                    nonlocal genre_message, top_embed, top_albums_str
+                    nonlocal genre_message, top_embed, top_albums_str, top_view
                     top_embed.description = "Fetching top albums from RYM..."
                     await genre_message.edit(embed=top_embed, view=top_view)
                     chart = genre_obj.top_chart
@@ -386,7 +386,7 @@ def main():
                     
                     top_embed.description = top_albums_str
                     await genre_message.edit(embed=top_embed, view=top_view)
-                    
+                    top_view.remove_item(force_load_button)
                     await interaction.response.defer()
 
                 force_load_button.callback = force_load_button_callback
