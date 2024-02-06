@@ -98,8 +98,12 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 
     i = 0
     users[active_id]["last"] = ratings[0][3]
+
+    user_ratings = list()
+    rating_counter = 0
     for (text, rym_url, review, timestamp) in ratings:
-        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
+        rating_counter += 1
+        if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format) or rating_counter >= 15:
             break
 
         i += 1
@@ -111,7 +115,6 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
                                                                                 # ["Rated", "2.5", ""] in case it's a rating
                                                                                 # ["", "", "Reviewed"] in case it's a review
 
-        await asyncio.sleep(120)
         if datetime.strptime(timestamp, date_format) <= datetime.strptime(last, date_format):
             break
         print(get_current_time_text(), rym_url)
@@ -120,6 +123,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         if cache.get("releases") and rym_url in cache["releases"]:
             release = cache["releases"][rym_url]
         else:
+            await asyncio.sleep(61)
             release = rympy.Release(rym_url)
             if not cache.get("releases"):
                 cache["releases"] = dict()
@@ -150,13 +154,14 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 
         date = re.search(r"\d{1,2} \w{3}", timestamp).group() # getting the day and month
 
+        primary_genres = str()
         if release.primary_genres:
             primary_genres = ", ".join([genre.name for genre in release.primary_genres])
 
+        secondary_genres = str()
         if release.secondary_genres:
             secondary_genres = "*" + ", ".join([genre.name for genre in release.secondary_genres]) + "*"
-        else:
-            secondary_genres = str()
+            
         body_text = f"{primary_genres}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
@@ -184,37 +189,32 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         if rating_info['thumbnail_url']:
             rating_embed.set_thumbnail(url=rating_info['thumbnail_url'])
 
-        links_view = discord.ui.View(timeout= None)
         button_list = list()
 
         if release.links.spotify:
-            button_list.append(discord.ui.Button(url= release.links.spotify, emoji= discord.PartialEmoji.from_str("<:sp:1141025089878499389>")))
+            button_list.append((release.links.spotify, "<:sp:1141025089878499389>"))
 
         if release.links.youtube:
-            button_list.append(discord.ui.Button(url= release.links.youtube, emoji= discord.PartialEmoji.from_str("<:yc:1140967863931392040>")))
-        
-        if release.links.bandcamp:
-            button_list.append(discord.ui.Button(url= release.links.bandcamp, emoji= discord.PartialEmoji.from_str("<:bc:1140967203596927017>")))
-        
-        if release.links.soundcloud:
-            button_list.append(discord.ui.Button(url= release.links.soundcloud, emoji= discord.PartialEmoji.from_str("<:sc:1140968078746857492>")))
-        
-        if release.links.apple_music:
-            button_list.append(discord.ui.Button(url= release.links.apple_music, emoji= discord.PartialEmoji.from_str("<:ac:1140967868708696104>")))
+            button_list.append((release.links.youtube, "<:yc:1140967863931392040>"))
 
-        button_count = 0
-        for button in button_list:
-            if button_count == 3:
-                break
-            if button:
-                links_view.add_item(button)
-                button_count += 1
-        await feed_channel.send(embed=rating_embed, view= links_view)
+        if release.links.bandcamp:
+            button_list.append((release.links.bandcamp, "<:bc:1140967203596927017>"))
+
+        if release.links.soundcloud:
+            button_list.append((release.links.soundcloud, "<:sc:1140968078746857492>"))
+
+        if release.links.apple_music:
+            button_list.append((release.links.apple_music, "<:ac:1140967868708696104>"))
+
+
+        button_list = button_list[:3]
 
         if not(last):
             break
+
+        user_ratings.append((datetime.strptime(timestamp, date_format), rating_embed, button_list))
     
-    return ratings[0][3]
+    return ratings[0][3], user_ratings
 
 def main():
     intents = discord.Intents.all()
@@ -232,11 +232,18 @@ def main():
             print(users)
             users_list = list(users)
             random.shuffle(users_list)
+            global ratings
+            ratings = list()
             for user_id in users_list:
+                
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
-                    last = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    ratings += user_ratings
+                except ET.ParseError:
+                    await feed_channel.send(f"you're probably ratelimited. press enter on your terminal whenever you're good to go <@{vars.whitelisted_ids[-1]}>")
+                    await asyncio.sleep(20 * 60)
                 except:
                     with open("error.log", "a") as error_file:
                         error_file.write(last_url + "\n" + traceback.format_exc() + "\n\n")
@@ -244,9 +251,7 @@ def main():
                 else:
                     users[user_id]["last"] = last
 
-                await asyncio.sleep(60)
-
-            with open('users_temp.json', 'w') as users_json:
+            with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
                     
 
@@ -255,6 +260,20 @@ def main():
             global cache
             with lzma.open('cache.lzma', 'wb') as file:
                 pickle.dump(cache, file)
+
+            sent_ratings = list()
+            for _, embed, button_list in sorted(ratings, key=lambda x: x[0]):
+                sent_ratings.append((_, embed, button_list))
+                try:
+                    links_view = discord.ui.View(timeout= None)
+                    for button in button_list:
+                        links_view.add_item(discord.ui.Button(url= button[0], emoji= discord.PartialEmoji.from_str(button[1])))
+                    await feed_channel.send(embed=embed, view=links_view)
+                    await asyncio.sleep(120)
+                except:
+                    with open("error.log", "a") as error_file:
+                        error_file.write(embed.title + "\n" + embed.description + "\n" + traceback.format_exc() + "\n\n")
+                    await feed_channel.send(f"Error found while sending rating data to this channel. Check log file. <@{vars.whitelisted_ids[-1]}>")
 
             await asyncio.sleep(vars.sleep_minutes * 60)
 
@@ -269,7 +288,7 @@ def main():
             "last": last
             }
         
-        with open('users_temp.json', 'w') as users_json:
+        with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         await sendable.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully added to the bot.")
@@ -301,7 +320,7 @@ def main():
             return
         users.pop(user_id)
 
-        with open('users_temp.json', 'w') as users_json:
+        with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
@@ -591,7 +610,7 @@ def main():
 
             users[user_id]["last"] = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
 
-            with open('users_temp.json', 'w') as users_json:
+            with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
 
     @bot.command()
