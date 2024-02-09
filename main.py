@@ -47,7 +47,7 @@ def parse_ratings(rym_user):
     url = f"https://rateyourmusic.com/~{rym_user}/data/rss"
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
     rss_response = requests.get(url, headers=headers) # get request using a browser header to avoid a RYM ban
-    print(rss_response.content)
+    print(get_current_time_text(), "Parsing ratings...")
     parsed_xml = ET.fromstring(rss_response.content)
     children = parsed_xml[0]
     ratings = [(rating[0].text, rating[1].text, get_review(rating[2]), rating[3].text) for rating in children if rating.tag == "item" and "/list/" not in rating[1].text]  # ratings and reviews have the
@@ -90,7 +90,7 @@ async def get_rating_from_review(rym_user, release_url):
 
 async def get_recent_info(member, rym_user, last_tmp, feed_channel):
     ratings = parse_ratings(rym_user)
-    print(get_current_time_text(), member.display_name, "parsed.\n")
+    print(get_current_time_text(), f"{member.display_name} ({rym_user}) parsed.")
 
     global users, last, active_id, last_url, cache
 
@@ -203,7 +203,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             line_colour = 0xdc36b5
         if release.average_rating <= 2.5:
             line_colour = 0xe4101a
-        if release.overall_position <= 250:
+        if release.overall_position and release.overall_position <= 250:
             line_colour = 0xf9b505
         if release.is_nazi:
             line_colour = 0
@@ -239,6 +239,8 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 
         user_ratings.append((datetime.strptime(timestamp, date_format), rating_embed, button_list))
     
+    print("\n")
+    
     return ratings[0][3], user_ratings
 
 def main():
@@ -253,8 +255,7 @@ def main():
         feed_channel = bot.get_channel(vars.channel_id)
         
         while True:
-            print(get_current_time_text(), "fetching updates...")
-            print(users)
+            print(get_current_time_text(), "Starting...")
             users_list = list(users)
             random.shuffle(users_list)
             global ratings
@@ -275,20 +276,16 @@ def main():
                     await feed_channel.send(f"Error found while getting rating data. Check log file. <@{vars.whitelisted_ids[-1]}>")
                 else:
                     users[user_id]["last"] = last
-
-            with open('users.json', 'w') as users_json:
-                users_json.write(json.dumps(users, indent=2))
-                    
-
-            print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes")
             
             global cache
             with lzma.open('cache.lzma', 'wb') as file:
                 pickle.dump(cache, file)
 
-            sent_ratings = list()
-            for _, embed, button_list in sorted(ratings, key=lambda x: x[0]):
-                sent_ratings.append((_, embed, button_list))
+            print(get_current_time_text(), "Sending ratings...")
+            for i, (_, embed, button_list) in enumerate(sorted(ratings, key=lambda x: x[0])):
+                if not math.floor(i % (len(ratings)/5)):
+                    full_percentage = math.floor(i/len(ratings)*100)
+                    print("█"* int((full_percentage/10)) + "_" * int((10 - full_percentage/10)) + "|", f"{full_percentage} %")
                 try:
                     links_view = discord.ui.View(timeout= None)
                     for button in button_list:
@@ -300,6 +297,11 @@ def main():
                         error_file.write(embed.title + "\n" + embed.description + "\n" + traceback.format_exc() + "\n\n")
                     await feed_channel.send(f"Error found while sending rating data to this channel. Check log file. <@{vars.whitelisted_ids[-1]}>")
 
+
+            with open('users.json', 'w') as users_json:
+                users_json.write(json.dumps(users, indent=2))
+
+            print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes\n\n")
             await asyncio.sleep(vars.sleep_minutes * 60)
 
     async def gen_add(rym_user, user_id, sendable):
