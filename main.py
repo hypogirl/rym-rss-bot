@@ -1,5 +1,6 @@
 import asyncio
 import random
+import math
 import json
 import pickle
 import lzma
@@ -161,8 +162,19 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         secondary_genres = str()
         if release.secondary_genres:
             secondary_genres = "*" + ", ".join([genre.name for genre in release.secondary_genres]) + "*"
+        
+        average_rating_str = str()
+        if release.average_rating:
+            average_rating_str = f"**{release.average_rating}** / 5.0 from {release.number_of_ratings} {'ratings' if release.number_of_ratings > 1 else 'rating'}\n\n"
+
+        position_str = str()
+        if release.year_postion:
+            position_str = f"**#{release.year_postion}** for [{release.release_date.year}](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/{release.release_date.year}/{math.ceil(release.year_postion/40)}/#pos{release.year_postion})"
+            if release.overall_position:
+                position_str += f", **#{release.overall_position}** [overall](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/all-time/deweight:live,archival,soundtrack/{math.ceil(release.overall_position/40)}/#pos{release.overall_position})"
+            position_str += "\n"
             
-        body_text = f"{primary_genres}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
+        body_text = f"{position_str}{average_rating_str}{primary_genres}\n{secondary_genres}\n\n**{date}** {star_rating}\n{review}"
         avatar_url = member.avatar.url if member.avatar else "https://e.snmc.io/3.0/img/logo/sonemic-32.png"
         user_url = f"https://rateyourmusic.com/~{rym_user}"
 
@@ -183,7 +195,20 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             "streaming_links": release.links
         }
 
-        rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color=0x2d5ea9, url=rating_info['url'])
+
+        line_colour = 0x2d5ea9
+        if release.is_bolded:
+            line_colour = 0x1dc02c
+        if "LGBT" in release.descriptors:
+            line_colour = 0xdc36b5
+        if release.average_rating <= 2.5:
+            line_colour = 0xe4101a
+        if release.overall_position <= 250:
+            line_colour = 0xf9b505
+        if release.is_nazi:
+            line_colour = 0
+
+        rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color= line_colour, url=rating_info['url'])
         rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
 
         if rating_info['thumbnail_url']:
@@ -391,18 +416,18 @@ def main():
             n = "\n"
             if len(genre_obj.top_ten_albums):
                 for i, album in enumerate(genre_obj.top_ten_albums):
-                    top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
+                    top_albums_str += f"{i+1}. [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
             else:
                 force_load_button = discord.ui.Button(label="Load list")
                 async def force_load_button_callback(interaction):
-                    nonlocal genre_message, top_embed, top_albums_str, top_view
+                    nonlocal genre_message, top_embed, top_view
                     top_embed.description = "Fetching top albums from RYM..."
                     await genre_message.edit(embed=top_embed, view=top_view)
                     chart = genre_obj.top_chart
                     top_ten = chart.entries[:10]
+                    top_albums_str = str()
                     for i, album in enumerate(top_ten):
-                        top_albums_str += f"**{i+1}.** [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
-                    
+                        top_albums_str += f"{i+1}. [{album.artist_name.replace(n,'').strip()} - {album.title.replace(n,'').strip()}](https://rateyourmusic.com{album.url})\n"
                     top_embed.description = top_albums_str
                     await genre_message.edit(embed=top_embed, view=top_view)
                     top_view.remove_item(force_load_button)
