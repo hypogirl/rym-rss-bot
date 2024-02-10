@@ -6,7 +6,7 @@ import pickle
 import lzma
 import re
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 import discord
 from discord.ext import commands
 import xml.etree.ElementTree as ET
@@ -14,6 +14,7 @@ import vars
 import requests
 import rympy
 from bs4 import BeautifulSoup
+from googleapiclient.discovery import build
 
 global users, last, active_id, last_url
 last = None
@@ -36,6 +37,19 @@ def get_current_time_text():
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
     return "[" + current_time + "]"
+
+def google_search(search_term, api_key, cse_id, **kwargs):
+    service = build("customsearch", "v1", developerKey=api_key)
+    res = service.cse().list(q=search_term, cx=cse_id, **kwargs).execute()
+    return res['items']
+
+def get_info_from_google(url):
+    result = google_search(url, vars.google_api_key, vars.cse_id, num=1)[0]
+    album_info = dict()
+    album_info["cover_url"] = result['pagemap']['cse_image'][0]['src']
+    album_info["average_rating"] = float(album_info['aggregaterating']['ratingvalue'])
+    album_info["number_of_ratings"] = int(album_info['aggregaterating']['ratingcount'])
+    return album_info
 
 def get_review(description_elem):
     if review_elem := description_elem.find('span'):
@@ -123,6 +137,13 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         last_url = rym_url
         if cache.get("releases") and rym_url in cache["releases"]:
             release = cache["releases"][rym_url]
+            googled_album_info = get_info_from_google(rym_url)
+            if googled_album_info["number_of_ratings"] > release.number_of_ratings:
+                release.number_of_ratings = googled_album_info["number_of_ratings"]
+                release.average_rating = googled_album_info["average_rating"]
+                if not release.cover_url:
+                    release.cover_url = googled_album_info["cover_url"]
+
         else:
             await asyncio.sleep(61)
             release = rympy.Release(rym_url)
@@ -168,7 +189,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             average_rating_str = f"**{release.average_rating}** / 5.0 from {release.number_of_ratings} {'ratings' if release.number_of_ratings > 1 else 'rating'}\n\n"
 
         position_str = str()
-        if release.year_postion:
+        if release.release_date and release.year_postion:
             position_str = f"**#{release.year_postion}** for [{release.release_date.year}](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/{release.release_date.year}/{math.ceil(release.year_postion/40)}/#pos{release.year_postion})"
             if release.overall_position:
                 position_str += f", **#{release.overall_position}** [overall](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/all-time/deweight:live,archival,soundtrack/{math.ceil(release.overall_position/40)}/#pos{release.overall_position})"
@@ -195,10 +216,13 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             "streaming_links": release.links
         }
 
-
+        
+        one_month_ago = datetime.now() - timedelta(days=30)
         line_colour = 0x2d5ea9
+        if release.release_date and release.release_date > one_month_ago:
+            line_colour = 0x00d163
         if release.is_bolded:
-            line_colour = 0x1dc02c
+            line_colour = 0x339a6d
         if "LGBT" in release.descriptors:
             line_colour = 0xdc36b5
         if release.average_rating <= 2.5:
@@ -261,15 +285,17 @@ def main():
             global ratings
             ratings = list()
             for user_id in users_list:
-                
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
+                    await asyncio.sleep(20)
                     last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                     ratings += user_ratings
                 except ET.ParseError:
-                    await feed_channel.send(f"you're probably ratelimited. press enter on your terminal whenever you're good to go <@{vars.whitelisted_ids[-1]}>")
-                    await asyncio.sleep(20 * 60)
+                    await feed_channel.send(f"RYM rate limit. <@{vars.whitelisted_ids[-1]}>")
+                    await asyncio.sleep(15 * 60)
+                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    users[user_id]["last"] = last
                 except:
                     with open("error.log", "a") as error_file:
                         error_file.write(last_url + "\n" + traceback.format_exc() + "\n\n")
@@ -296,7 +322,7 @@ def main():
                     with open("error.log", "a") as error_file:
                         error_file.write(embed.title + "\n" + embed.description + "\n" + traceback.format_exc() + "\n\n")
                     await feed_channel.send(f"Error found while sending rating data to this channel. Check log file. <@{vars.whitelisted_ids[-1]}>")
-
+            print("██████████| 100%")
 
             with open('users.json', 'w') as users_json:
                 users_json.write(json.dumps(users, indent=2))
@@ -351,6 +377,32 @@ def main():
             users_json.write(json.dumps(users, indent=2))
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
+
+    def gen_left_button(index, formatted_pages, embed, message, view):
+        left_button = discord.ui.Button(label="◄")
+        async def left_button_callback(interaction):
+            nonlocal index, formatted_pages, embed, message, view
+            if index > 0:
+                index -= 1
+            embed.description = f"{formatted_pages[index]}\n\n**Page {index+1}/{len(formatted_pages)}**"
+            await message.edit(embed=embed, view= view)
+            await interaction.response.defer()
+        left_button.callback = left_button_callback
+        return left_button
+
+    def gen_right_button(index, formatted_pages, embed, message, view):
+        right_button = discord.ui.Button(label="►")
+        async def right_button_callback(interaction):
+            nonlocal index, formatted_pages, embed, message, view
+            if index < len(formatted_pages) - 1:
+                index += 1
+            embed.description = f"{formatted_pages[index]}\n\n**Page {index+1}/{len(formatted_pages)}**"
+            await message.edit(embed=embed, view= view)
+            await interaction.response.defer()
+        right_button.callback = right_button_callback
+
+    def gen_buttons(index, formatted_pages, embed, message, view):
+        return gen_left_button(index, formatted_pages, embed, message, view), gen_right_button(index, formatted_pages, embed, message, view)
 
     @bot.command()
     async def genre(ctx, *, arg):
@@ -447,33 +499,12 @@ def main():
             top_albums_button.callback = top_albums_button_callback
             
             bold_ascii_alphabet = {
-                ' ': ' ',
-                'a': '𝐴',
-                'b': '𝐵',
-                'c': '𝐶',
-                'd': '𝐷',
-                'e': '𝐸',
-                'f': '𝐹',
-                'g': '𝐺',
-                'h': '𝐻',
-                'i': '𝐼',
-                'j': '𝐽',
-                'k': '𝐾',
-                'l': '𝐿',
-                'm': '𝑀',
-                'n': '𝑁',
-                'o': '𝑂',
-                'p': '𝑃',
-                'q': '𝑄',
-                'r': '𝑅',
-                's': '𝑆',
-                't': '𝑇',
-                'u': '𝑈',
-                'v': '𝑉',
-                'w': '𝑊',
-                'x': '𝑋',
-                'y': '𝑌',
-                'z': '𝑍',
+                'A': '𝗔', 'B': '𝗕', 'C': '𝗖', 'D': '𝗗', 'E': '𝗘',
+                'F': '𝗙', 'G': '𝗚', 'H': '𝗛', 'I': '𝗜', 'J': '𝗝',
+                'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢',
+                'P': '𝗣', 'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧',
+                'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫', 'Y': '𝗬',
+                'Z': '𝗭'
             }
             
             hierarchy_genre_buttons = list()
@@ -519,45 +550,9 @@ def main():
                 children_genres_button.callback = children_genres_button_callback
                 hierarchy_genre_buttons.append(children_genres_button)
                 hierarchy_index = 0
-                left_button_child = discord.ui.Button(label="◄")
-                async def left_button_callback(interaction):
-                    nonlocal hierarchy_index, children_genre_formatted_pages, children_genres_embed, genre_message, children_genres_view
-                    if hierarchy_index > 0:
-                        hierarchy_index -= 1
-                    children_genres_embed.description = f"{children_genre_formatted_pages[hierarchy_index]}\n\n**Page {hierarchy_index+1}/{len(children_genre_formatted_pages)}**"
-                    await genre_message.edit(embed=children_genres_embed, view= children_genres_view)
-                    await interaction.response.defer()
-                left_button_child.callback = left_button_callback
-
-                right_button_child = discord.ui.Button(label="►")
-                async def right_button_callback(interaction):
-                    nonlocal hierarchy_index, children_genre_formatted_pages, children_genres_embed, genre_message, children_genres_view
-                    if hierarchy_index < len(children_genre_formatted_pages) - 1:
-                        hierarchy_index += 1
-                    children_genres_embed.description = f"{children_genre_formatted_pages[hierarchy_index]}\n\n**Page {hierarchy_index+1}/{len(children_genre_formatted_pages)}**"
-                    await genre_message.edit(embed=children_genres_embed, view= children_genres_view)
-                    await interaction.response.defer()
-                right_button_child.callback = right_button_callback
-
-            left_button = discord.ui.Button(label="◄")
-            async def left_button_callback(interaction):
-                nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
-                if expand_index > 0:
-                    expand_index -= 1
-                expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
-                await genre_message.edit(embed=expanded_embed, view= expanded_view)
-                await interaction.response.defer()
-            left_button.callback = left_button_callback
-
-            right_button = discord.ui.Button(label="►")
-            async def right_button_callback(interaction):
-                nonlocal expand_index, description_pages, expanded_embed, genre_message, expanded_view
-                if expand_index < len(description_pages) - 1:
-                    expand_index += 1
-                expanded_embed.description = f"{description_pages[expand_index]}\n\n**Page {expand_index+1}/{len(description_pages)}**"
-                await genre_message.edit(embed=expanded_embed, view= expanded_view)
-                await interaction.response.defer()
-            right_button.callback = right_button_callback
+                left_button_child, right_button_child = gen_buttons(hierarchy_index, children_genre_formatted_pages, children_genres_embed, genre_message, children_genres_view)
+                
+            left_button, right_button = gen_buttons(expand_index, description_pages, expanded_embed, genre_message, expanded_view)
 
             genre_init_view.add_item(expand_button)
             genre_init_view.add_item(top_albums_button)
@@ -596,27 +591,7 @@ def main():
         
         user_list_view = discord.ui.View(timeout= 300)
 
-        left_button = discord.ui.Button(label="◄")
-        async def left_button_callback(interaction):
-            nonlocal page_index, user_list_embed, userlist_message
-            if page_index > 0:
-                page_index -= 1
-            user_list_embed.description = f"{user_list_pages[page_index]}\n\n**Page {page_index+1}/{len(user_list_pages)}**"
-            await userlist_message.edit(embed=user_list_embed, view= user_list_view)
-            await interaction.response.defer()
-
-        left_button.callback = left_button_callback
-
-        right_button = discord.ui.Button(label="►")
-        async def right_button_callback(interaction):
-            nonlocal page_index, user_list_embed, userlist_message
-            if page_index < len(user_list_pages) - 1:
-                page_index += 1
-            user_list_embed.description = f"{user_list_pages[page_index]}\n\n**Page {page_index+1}/{len(user_list_pages)}**"
-            await userlist_message.edit(embed=user_list_embed, view= user_list_view)
-            await interaction.response.defer()
-
-        right_button.callback = right_button_callback
+        left_button, right_button = gen_buttons(page_index, user_list_pages, user_list_embed, userlist_message, user_list_view)
 
         user_list_view.add_item(left_button)
         user_list_view.add_item(right_button)
