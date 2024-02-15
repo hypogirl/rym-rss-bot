@@ -5,6 +5,7 @@ import json
 import pickle
 import lzma
 import re
+import os
 import traceback
 from datetime import datetime, timedelta
 import discord
@@ -15,6 +16,9 @@ import requests
 import rympy
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
+import googleapiclient
+import shutil
+import pylast
 
 global users, last, active_id, last_url
 last = None
@@ -38,18 +42,52 @@ def get_current_time_text():
     current_time = now.strftime("%H:%M:%S")
     return "[" + current_time + "]"
 
-def google_search(search_term, api_key, cse_id, **kwargs):
-    service = build("customsearch", "v1", developerKey=api_key)
-    res = service.cse().list(q=search_term, cx=cse_id, **kwargs).execute()
+def google_search(search_term):
+    service = build("customsearch", "v1", developerKey=vars.google_api_key)
+    service_2 = build("customsearch", "v1", developerKey=vars.google_api_key_2)
+    try:
+        res = service.cse().list(q=search_term, cx=vars.cse_id, num=1).execute()
+    except googleapiclient.errors.HttpError:
+        try:
+            res = service.cse().siterestrict().list(q=search_term, cx=vars.cse_id, num=1).execute()
+        except googleapiclient.errors.HttpError:
+            try:
+                res = service_2.cse().list(q=search_term, cx=vars.cse_id, num=1).execute()
+            except googleapiclient.errors.HttpError:
+                res = service_2.cse().siterestrict().list(q=search_term, cx=vars.cse_id, num=1).execute()
     return res['items']
 
 def get_info_from_google(url):
-    result = google_search(url, vars.google_api_key, vars.cse_id, num=1)[0]
-    album_info = dict()
-    album_info["cover_url"] = result['pagemap']['cse_image'][0]['src']
-    album_info["average_rating"] = float(album_info['aggregaterating']['ratingvalue'])
-    album_info["number_of_ratings"] = int(album_info['aggregaterating']['ratingcount'])
-    return album_info
+    result = google_search(url)[0]
+    release_info = dict()
+    if result['pagemap'].get('cse_image'):
+        release_info["cover_url"] = result['pagemap']['cse_image'][0]['src']
+    release_info["average_rating"] = float(result['pagemap']['aggregaterating'][0]['ratingvalue'])
+    release_info["number_of_ratings"] = int(result['pagemap']['aggregaterating'][0]['ratingcount'])
+    if year_position := re.search(r"(\d+) in the best albums of", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["year_position"] = int(year_position.group(1))
+    if overall_position := re.search(r"(\d+) of all time", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["overall_position"] = int(overall_position.group(1))
+    if primary_genres := re.search(r"Genres: ([^.]+)", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["primary_genres"] = primary_genres.group(1)
+    if album_title := re.search(r"^(.+), an? ", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["title"] = album_title.group(1)
+    if artist_name := re.search(r"by (.+) -", result["pagemap"]["metatags"][0]['og:title']):
+        release_info["artist_name"] = artist_name.group(1)
+    if release_type := re.search(r"an? +(\w+)", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["release_type"] = release_type.group(1)
+    if year := re.search(r"Released .+ (\d{4})", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["year"] = year.group(1)
+    release_info['url'] = result['link']
+    if date_match := re.search(r"Released (?:in )?(.*\d{4}) on", result['snippet']):
+        date_text = date_match.group(1)
+        date_components_count = date_text.count(" ") + 1
+        date_formating = {1: "%Y",
+                        2: "%B %Y",
+                        3: "%d %B %Y"}
+        
+        release_info["release_date"] = datetime.strptime(date_text, date_formating[date_components_count])
+    return release_info
 
 def get_review(description_elem):
     if review_elem := description_elem.find('span'):
@@ -137,12 +175,22 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         last_url = rym_url
         if cache.get("releases") and rym_url in cache["releases"]:
             release = cache["releases"][rym_url]
-            googled_album_info = get_info_from_google(rym_url)
-            if googled_album_info["number_of_ratings"] > release.number_of_ratings:
-                release.number_of_ratings = googled_album_info["number_of_ratings"]
-                release.average_rating = googled_album_info["average_rating"]
-                if not release.cover_url:
-                    release.cover_url = googled_album_info["cover_url"]
+            try:
+                googled_release_info = get_info_from_google(release.title + " " + release.artist_name)
+                if googled_release_info["number_of_ratings"] > release.number_of_ratings:
+                    print("Updated rating.", release.average_rating, "->", googled_release_info["average_rating"])
+                    release.number_of_ratings = googled_release_info["number_of_ratings"]
+                    release.average_rating = googled_release_info["average_rating"]
+                    if not release.cover_url and googled_release_info.get("cover_url"):
+                        release.cover_url = googled_release_info["cover_url"]
+                    if googled_release_info.get("year_position"):
+                        print("Updated year position.", release.year_position, "->", googled_release_info["year_position"])
+                        release.year_position = googled_release_info["year_position"]
+                    if googled_release_info.get("overall_position"):
+                        print("Updated overall position.", release.overall_position, "->", googled_release_info["overall_position"])
+                        release.overall_position = googled_release_info["overall_position"]
+            except KeyError:
+                print(rym_url, "not found on google")
 
         else:
             await asyncio.sleep(61)
@@ -169,6 +217,20 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
                 review = str()
                 rated_text = "rated"
 
+        if not cache.get("users"):
+                cache["users"] = dict()
+        if str(member.id) not in cache["users"]:
+            cache["users"][str(member.id)] = rympy.SimpleUser(username=users[str(member.id)]["rym"])
+
+        cache["users"][str(member.id)].add_rating(rympy.Rating(id=release.id,
+                    last_name=release.artist_name,
+                    title=release.title,
+                    release_year=release.release_date.year if release.release_date else None,
+                    rating=rating,
+                    review=review,
+                    url=release.url,
+                    release=release))
+
         if rating:
             star_rating = "<:star:1135605958333186149>" * int(rating) + "<:half:1135605972564455434> "  * (1 if rating != int(rating) else 0) # this simply makes a string with star (and half star) emojis corresponding to the user's rating
         else:
@@ -189,8 +251,8 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
             average_rating_str = f"**{release.average_rating}** / 5.0 from {release.number_of_ratings} {'ratings' if release.number_of_ratings > 1 else 'rating'}\n\n"
 
         position_str = str()
-        if release.release_date and release.year_postion:
-            position_str = f"**#{release.year_postion}** for [{release.release_date.year}](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/{release.release_date.year}/{math.ceil(release.year_postion/40)}/#pos{release.year_postion})"
+        if release.release_date and release.year_position:
+            position_str = f"**#{release.year_position}** for [{release.release_date.year}](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/{release.release_date.year}/{math.ceil(release.year_position/40)}/#pos{release.year_position})"
             if release.overall_position:
                 position_str += f", **#{release.overall_position}** [overall](https://rateyourmusic.com/charts/top/{release.type.split(',')[0].lower()}/all-time/deweight:live,archival,soundtrack/{math.ceil(release.overall_position/40)}/#pos{release.overall_position})"
             position_str += "\n"
@@ -220,7 +282,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         one_month_ago = datetime.now() - timedelta(days=30)
         line_colour = 0x2d5ea9
         if release.release_date and release.release_date > one_month_ago:
-            line_colour = 0x00d163
+            line_colour = 0x00df0d
         if release.is_bolded:
             line_colour = 0x339a6d
         if "LGBT" in release.descriptors:
@@ -230,7 +292,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         if release.overall_position and release.overall_position <= 250:
             line_colour = 0xf9b505
         if release.is_nazi:
-            line_colour = 0
+            line_colour = 0x2b2d31
 
         rating_embed = discord.Embed(title=rating_info['title'][:255], description=rating_info['description'], color= line_colour, url=rating_info['url'])
         rating_embed.set_author(name=rating_info['author'], icon_url=rating_info['icon_url'], url=rating_info['user_url'])
@@ -270,6 +332,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
 def main():
     intents = discord.Intents.all()
     bot = commands.Bot(command_prefix= vars.command_prefix, intents= intents)
+    network = pylast.LastFMNetwork(api_key=vars.lfm_key, api_secret=vars.lfm_secret)
 
     @bot.event
     async def on_ready():
@@ -288,7 +351,7 @@ def main():
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
-                    await asyncio.sleep(20)
+                    await asyncio.sleep(61)
                     last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
                     ratings += user_ratings
                 except ET.ParseError:
@@ -304,8 +367,10 @@ def main():
                     users[user_id]["last"] = last
             
             global cache
-            with lzma.open('cache.lzma', 'wb') as file:
+            with lzma.open('cache_tmp.lzma', 'wb') as file:
                 pickle.dump(cache, file)
+
+            shutil.copy2("cache_tmp.lzma", "cache.lzma")
 
             print(get_current_time_text(), "Sending ratings...")
             for i, (_, embed, button_list) in enumerate(sorted(ratings, key=lambda x: x[0])):
@@ -354,6 +419,17 @@ def main():
         discord_rym_user = re.findall(r"(<@(\d+)>|\d+) +(\w+)", arg)
         user_id = discord_rym_user[0][1]
         rym_user = discord_rym_user[0][2]
+
+        global cache
+        if not cache.get("users"):
+            cache["users"] = dict()
+        cache["users"][user_id] = rympy.SimpleUser(username=rym_user)
+
+        with lzma.open('cache_tmp.lzma', 'wb') as file:
+            pickle.dump(cache, file)
+
+        shutil.copy2("cache_tmp.lzma", "cache.lzma")
+
         await gen_add(rym_user, user_id, ctx)
 
     #@tree.command(name = "add")
@@ -378,31 +454,124 @@ def main():
 
         await ctx.send(f"<@{user_id}> (RYM username: **{rym_user}**) has been successfully removed from the bot.")
 
-    def gen_left_button(index, formatted_pages, embed, message, view):
-        left_button = discord.ui.Button(label="◄")
+    @bot.command()
+    async def setlastfm(ctx, *, arg):
+        global users
+        users[str(ctx.author.id)]["lfm"] = arg
+        with open('users.json', 'w') as users_json:
+            users_json.write(json.dumps(users, indent=2))
+        await ctx.reply(f"Your last.fm account (**{arg}**) has been added.")
+
+    @bot.command()
+    async def importratings(ctx, *, arg=None):
+        global cache
+        if not cache.get("users"):
+            cache["users"] = dict()
+        if str(ctx.author.id) not in cache["users"]:
+            cache["users"][str(ctx.author.id)] = rympy.SimpleUser(username=users[str(ctx.author.id)]["rym"])
+        if arg:
+            cache["users"][str(ctx.author.id)].import_ratings(url=arg)
+        else:
+            cache["users"][str(ctx.author.id)].import_ratings(url=ctx.message.attachments[0].url)
+        
+        await ctx.reply("Your ratings have been imported successfully.")
+
+    @bot.command()
+    async def w(ctx, *, arg=None):
+        global users
+        if not arg:
+            user = network.get_user(users[str(ctx.author.id)]["lfm"])
+            current_track = user.get_now_playing()
+            arg = str(current_track.artist) + " " + current_track.get_album().title
+        release_info = get_info_from_google(arg)
+        cached_release = None
+        if release_info['url'] in cache['releases']:
+            cached_release = cache['releases'][release_info['url']]
+        user_ratings = str()
+        if release_info.get('year_position'):
+            user_ratings += f"**#{release_info['year_position']}** for [{release_info['year']}](https://rateyourmusic.com/charts/top/{release_info['release_type'].lower()}/{release_info['year']}/{math.ceil(int(release_info['year_position'])/40)}/#pos{release_info['year_position']})"
+            if release_info.get('overall_position'):
+                user_ratings += f", **#{release_info['overall_position']}** [overall](https://rateyourmusic.com/charts/top/{release_info['release_type'].lower()}/all-time/deweight:live,archival,soundtrack/{math.ceil(int(release_info['overall_position'])/40)}/#pos{release_info['overall_position']})"
+            user_ratings += "\n"
+        
+        if release_info.get('number_of_ratings'):
+            user_ratings += f"**{release_info.get('average_rating')}** / 5.0 from {release_info.get('number_of_ratings')} ratings\n"
+        
+        if release_info.get('primary_genres'):
+            user_ratings += f"**Primary genres:** {release_info['primary_genres']}\n"
+            if cached_release:
+                user_ratings += f"**Secondary genres:** {', '.join([genre.name for genre in cached_release.secondary_genres])}\n"
+            user_ratings += "\n"
+
+        one_month_ago = datetime.now() - timedelta(days=30)
+        line_colour = 0x2d5ea9
+        if cached_release:
+            if cached_release.release_date and cached_release.release_date > one_month_ago:
+                line_colour = 0x00df0d
+            if cached_release.is_bolded:
+                line_colour = 0x339a6d
+            if "LGBT" in cached_release.descriptors:
+                line_colour = 0xdc36b5
+            if cached_release.average_rating <= 2.5:
+                line_colour = 0xe4101a
+            if cached_release.overall_position and cached_release.overall_position <= 250:
+                line_colour = 0xf9b505
+            if cached_release.is_nazi:
+                line_colour = 0x2b2d31
+        else:
+            if release_info.get("release_date") and release_info["release_date"] > one_month_ago:
+                line_colour = 0x00df0d
+            if release_info.get("overall_position") and release_info["overall_position"] <= 7500:
+                line_colour = 0x339a6d
+            if release_info.get("average_rating") <= 2.5:
+                line_colour = 0xe4101a
+            if release_info.get("overall_position") and release_info["overall_position"] <= 250:
+                line_colour = 0xf9b505
+
+        
+        if not cache.get("users"):
+            cache["users"] = dict()
+
+        for user in cache["users"]:
+            if cache["users"][user].ratings:
+                for rating in cache["users"][user].ratings:
+                    if rating.url == release_info['url'] or (rating.artist_name == release_info['artist_name'] and rating.title == release_info['title'] and rating.release_year == int(release_info["year"])) and rating.rating:
+                        user_nick = ctx.guild.get_member(int(user)).display_name 
+                        if ctx.author.id == int(user):
+                            user_nick = "**" + user_nick + "**"
+                        star_rating = "<:star:1135605958333186149>" * int(rating.rating) + "<:half:1135605972564455434> "  * (1 if rating.rating != int(rating.rating) else 0)
+                        user_ratings += f"◦ [{user_nick}]({rympy.ROOT_URL}/~{users[user]['rym']}) - {star_rating}\n"
+                        break
+        
+
+        ratings_embed = discord.Embed(title=f"{release_info['artist_name']} - {release_info['title']} ({release_info['year']}, {release_info['release_type']})", description=user_ratings, color=line_colour, url=release_info['url'])
+        if release_info.get('cover_url'):
+            if cached_release:
+                cover_url = cached_release.cover_url
+            else:
+                cover_url = release_info['cover_url']
+            ratings_embed.set_thumbnail(url=cover_url)
+
+        await ctx.send(embed=ratings_embed)
+
+    def gen_button(index, formatted_pages, embed, message, view, left):
+        button = discord.ui.Button(label="◄")
         async def left_button_callback(interaction):
             nonlocal index, formatted_pages, embed, message, view
-            if index > 0:
-                index -= 1
+            if left:
+                if index > 0:
+                    index -= 1
+            else:
+                if index < len(formatted_pages) - 1:
+                    index += 1
             embed.description = f"{formatted_pages[index]}\n\n**Page {index+1}/{len(formatted_pages)}**"
             await message.edit(embed=embed, view= view)
             await interaction.response.defer()
-        left_button.callback = left_button_callback
-        return left_button
-
-    def gen_right_button(index, formatted_pages, embed, message, view):
-        right_button = discord.ui.Button(label="►")
-        async def right_button_callback(interaction):
-            nonlocal index, formatted_pages, embed, message, view
-            if index < len(formatted_pages) - 1:
-                index += 1
-            embed.description = f"{formatted_pages[index]}\n\n**Page {index+1}/{len(formatted_pages)}**"
-            await message.edit(embed=embed, view= view)
-            await interaction.response.defer()
-        right_button.callback = right_button_callback
+        button.callback = left_button_callback
+        return button
 
     def gen_buttons(index, formatted_pages, embed, message, view):
-        return gen_left_button(index, formatted_pages, embed, message, view), gen_right_button(index, formatted_pages, embed, message, view)
+        return gen_button(index, formatted_pages, embed, message, view, True), gen_button(index, formatted_pages, embed, message, view, False)
 
     @bot.command()
     async def genre(ctx, *, arg):
@@ -504,7 +673,7 @@ def main():
                 'K': '𝗞', 'L': '𝗟', 'M': '𝗠', 'N': '𝗡', 'O': '𝗢',
                 'P': '𝗣', 'Q': '𝗤', 'R': '𝗥', 'S': '𝗦', 'T': '𝗧',
                 'U': '𝗨', 'V': '𝗩', 'W': '𝗪', 'X': '𝗫', 'Y': '𝗬',
-                'Z': '𝗭'
+                'Z': '𝗭', " ": " "
             }
             
             hierarchy_genre_buttons = list()
@@ -513,7 +682,7 @@ def main():
                 #parent genres
                 parent_genres_view = discord.ui.View(timeout= 300)
                 parent_genres_button = discord.ui.Button(label="Parent genres")
-                parent_genre_formatted_description = str().join(parent_genre.name + "\n|\n" for parent_genre in genre_obj.parent_genres) + f"└-- {str().join(bold_ascii_alphabet[letter.lower()] for letter in genre_obj.name)}"
+                parent_genre_formatted_description = str().join(parent_genre.name + "\n|\n" for parent_genre in genre_obj.parent_genres) + f"└-- {str().join(bold_ascii_alphabet[letter.upper()] for letter in genre_obj.name)}"
                 parent_genres_embed = discord.Embed(title=f"{genre_obj.name} parent genre hierarchy", description=f"```\n{parent_genre_formatted_description}```")
                 async def parent_genres_button_callback(interaction):
                     nonlocal genre_message, parent_genres_embed, parent_genres_view
@@ -537,7 +706,7 @@ def main():
                             if fixed_name in cache["genres"]:
                                 description_fragment += recursive_children_search(space_count+4,cache["genres"][fixed_name].children_genres)
                     return description_fragment
-                children_genre_formatted_description = str().join(bold_ascii_alphabet[letter.lower()] for letter in genre_obj.name)
+                children_genre_formatted_description = str().join(bold_ascii_alphabet[letter.upper()] for letter in genre_obj.name)
                 children_genre_formatted_description += recursive_children_search(0, genre_obj.children_genres)
                 children_genre_formatted_split = children_genre_formatted_description.split("\n")
                 children_genre_formatted_pages = ["```\n" + "\n".join(children_genre_formatted_split[i:i+14]) + "```" for i in range(0,len(children_genre_formatted_split),14)]
@@ -625,8 +794,24 @@ def main():
         with open('users.json', 'w') as users_json:
             users_json.write(json.dumps(users, indent=2))
         
-        with lzma.open('cache.lzma', 'wb') as file:
+        with lzma.open('cache_tmp.lzma', 'wb') as file:
             pickle.dump(cache, file)
+
+        shutil.copy2("cache_tmp.lzma", "cache.lzma")
+        
+        await ctx.reply("Info saved successfully.")
+
+    @bot.command()
+    async def savecache(ctx):
+        global users, cache
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+            return
+        
+        with lzma.open('cache_tmp.lzma', 'wb') as file:
+            pickle.dump(cache, file)
+
+        shutil.copy2("cache_tmp.lzma", "cache.lzma")
+        os.remove("cache_tmp.lzma")
         
         await ctx.reply("Info saved successfully.")
 
@@ -647,9 +832,12 @@ def main():
     @bot.command()
     async def user(ctx, *, arg=None):
         global users
+        end_str = str()
 
         if not(arg):
             rym = users[str(ctx.author.id)]["rym"]
+            if lfm := users[str(ctx.author.id)].get("lfm"):
+                end_str = f"\naLast.fm profile: https://www.last.fm/user/{lfm}"
             await ctx.send(f"Your RYM profile:\nhttps://rateyourmusic.com/~{rym}")
             return
         
@@ -660,8 +848,12 @@ def main():
         except KeyError:
             await ctx.send("That user is not connected to the bot.")
             return
+        
         member = ctx.guild.get_member(int(user_id))
-        await ctx.send(f"**{member.display_name}**'s RYM profile:\nhttps://rateyourmusic.com/~{rym}")
+
+        if lfm := users[user_id].get("lfm"):
+            end_str = f"\naLast.fm profile: https://www.last.fm/user/{lfm}"
+        await ctx.send(f"**{member.display_name}**'s RYM profile: https://rateyourmusic.com/~{rym}{end_str}")
         
     bot.run(vars.token)
 
