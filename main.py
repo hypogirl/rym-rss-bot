@@ -5,7 +5,6 @@ import json
 import pickle
 import lzma
 import re
-import os
 import traceback
 from datetime import datetime, timedelta
 import discord
@@ -57,7 +56,7 @@ def google_search(search_term):
                 res = service_2.cse().siterestrict().list(q=search_term, cx=vars.cse_id, num=1).execute()
     return res['items']
 
-def get_info_from_google(url):
+def get_release_info_from_google(url):
     result = google_search(url)[0]
     release_info = dict()
     if result['pagemap'].get('cse_image'):
@@ -74,9 +73,13 @@ def get_info_from_google(url):
         release_info["title"] = album_title.group(1)
     if artist_name := re.search(r"by (.+) -", result["pagemap"]["metatags"][0]['og:title']):
         release_info["artist_name"] = artist_name.group(1)
-    if release_type := re.search(r"an? +(\w+)", result["pagemap"]["metatags"][0]['og:description']):
+    if release_type := re.search(r", an? +([\w ]+) by ", result["pagemap"]["metatags"][0]['og:description']):
         release_info["release_type"] = release_type.group(1)
-    if year := re.search(r"Released .+ (\d{4})", result["pagemap"]["metatags"][0]['og:description']):
+    elif release_type := re.search(r", an? +([\w+ ]+)(?! by )\.", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["release_type"] = release_type.group(1)
+    if year := re.search(r"Released .+ (\d{4}) on", result["pagemap"]["metatags"][0]['og:description']):
+        release_info["year"] = year.group(1)
+    elif year := re.search(r"Released .+ (\d{4}).", result["pagemap"]["metatags"][0]['og:description']):
         release_info["year"] = year.group(1)
     release_info['url'] = result['link']
     if date_match := re.search(r"Released (?:in )?(.*\d{4}) on", result['snippet']):
@@ -85,9 +88,16 @@ def get_info_from_google(url):
         date_formating = {1: "%Y",
                         2: "%B %Y",
                         3: "%d %B %Y"}
-        
         release_info["release_date"] = datetime.strptime(date_text, date_formating[date_components_count])
     return release_info
+
+def get_artist_info_from_google(url):
+    result = google_search(url)[0]
+    artist_info = dict()
+    artist_info['url'] = result['link']
+    if genres := re.search(r"Genres: ([^.]+)", result["pagemap"]["metatags"][0]['og:description']):
+        artist_info['genres'] = genres.group(1)
+    return artist_info
 
 def get_review(description_elem):
     if review_elem := description_elem.find('span'):
@@ -140,9 +150,12 @@ async def get_rating_from_review(rym_user, release_url):
 
     return review_rating
 
-async def get_recent_info(member, rym_user, last_tmp, feed_channel):
+async def get_recent_info(member, rym_user, last_tmp, feed_channel, user_id):
     ratings = parse_ratings(rym_user)
-    print(get_current_time_text(), f"{member.display_name} ({rym_user}) parsed.")
+    try:
+        print(get_current_time_text(), f"{member.display_name} ({rym_user}) parsed.")
+    except AttributeError:
+        await feed_channel.send(f"<@{user_id}> is not in the server anymore")
 
     global users, last, active_id, last_url, cache
 
@@ -176,7 +189,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel):
         if cache.get("releases") and rym_url in cache["releases"]:
             release = cache["releases"][rym_url]
             try:
-                googled_release_info = get_info_from_google(release.title + " " + release.artist_name)
+                googled_release_info = get_release_info_from_google(release.title + " " + release.artist_name)
                 if googled_release_info["number_of_ratings"] > release.number_of_ratings:
                     print("Updated rating.", release.average_rating, "->", googled_release_info["average_rating"])
                     release.number_of_ratings = googled_release_info["number_of_ratings"]
@@ -340,24 +353,22 @@ def main():
         print(f'Logged in as {bot.user}.\n')
         
         feed_channel = bot.get_channel(vars.channel_id)
-        
+        await asyncio.sleep(int(input("Minutes: "))*60)
         while True:
             print(get_current_time_text(), "Starting...")
-            users_list = list(users)
-            random.shuffle(users_list)
             global ratings
             ratings = list()
-            for user_id in users_list:
+            for user_id in users:
                 member = bot.get_guild(vars.guild_id).get_member(int(user_id))
 
                 try:
                     await asyncio.sleep(61)
-                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel, user_id)
                     ratings += user_ratings
                 except ET.ParseError:
                     await feed_channel.send(f"RYM rate limit. <@{vars.whitelisted_ids[-1]}>")
                     await asyncio.sleep(15 * 60)
-                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel)
+                    last, user_ratings = await get_recent_info(member, users[user_id]["rym"], users[user_id]["last"], feed_channel, user_id)
                     users[user_id]["last"] = last
                 except:
                     with open("error.log", "a") as error_file:
@@ -370,13 +381,11 @@ def main():
             with lzma.open('cache_tmp.lzma', 'wb') as file:
                 pickle.dump(cache, file)
 
-            shutil.copy2("cache_tmp.lzma", "cache.lzma")
-
             print(get_current_time_text(), "Sending ratings...")
             for i, (_, embed, button_list) in enumerate(sorted(ratings, key=lambda x: x[0])):
                 if not math.floor(i % (len(ratings)/5)):
                     full_percentage = math.floor(i/len(ratings)*100)
-                    print("█"* int((full_percentage/10)) + "_" * int((10 - full_percentage/10)) + "|", f"{full_percentage} %")
+                    print("█"* int(full_percentage/10) + "_" * int((10 - int(full_percentage/10))) + "|", f"{full_percentage} %")
                 try:
                     links_view = discord.ui.View(timeout= None)
                     for button in button_list:
@@ -394,6 +403,24 @@ def main():
 
             print(get_current_time_text(), f"sleeping for {vars.sleep_minutes} minutes\n\n")
             await asyncio.sleep(vars.sleep_minutes * 60)
+
+    @bot.event
+    async def on_message(message):
+        if message.author == bot.user:
+            return
+        
+        if message.content.startswith("$"):
+            await bot.process_commands(message)
+            return
+        
+        '''if message.author.id == 356268235697553409 and message.embeds:
+            single_embed = message.embeds[0]
+            if "WhoKnows artist" in single_embed.footer.text:
+                artist_info = get_artist_info_from_google(single_embed.title.split(" in ")[0])
+                footer_text_split = single_embed.footer.text.split("\n")
+                if len(footer_text_split) == 1:
+                    single_embed.footer.text = f'RYM genres: {artist_info["genres"].lower().replace(",", " -")}\n{footer_text_split[0]}'
+'''
 
     async def gen_add(rym_user, user_id, sendable):
         global users
@@ -442,7 +469,7 @@ def main():
             return
         
         global users
-        user_id = re.search(r"<@(\d{18)}>|(\d{18})", arg).group()
+        user_id = re.search(r"<@(\d+)>|(\d+)", arg).group()
         rym_user = users[user_id]["rym"]
         if user_id not in users:
             await ctx.send(f"This user is not connected to the bot.")
@@ -481,9 +508,16 @@ def main():
         global users
         if not arg:
             user = network.get_user(users[str(ctx.author.id)]["lfm"])
-            current_track = user.get_now_playing()
-            arg = str(current_track.artist) + " " + current_track.get_album().title
-        release_info = get_info_from_google(arg)
+            if not (current_track := user.get_now_playing()):
+                last_track = user.get_recent_tracks(limit=1)[0]
+                arg = str(last_track.track.artist) + " " + last_track.album.title()
+            else:
+                arg = str(current_track.artist) + " " + current_track.get_album().title
+        try:
+            release_info = get_release_info_from_google(arg)
+        except KeyError:
+            await ctx.send(f"The album **\"{arg}\"** was not found.")
+            return
         cached_release = None
         if release_info['url'] in cache['releases']:
             cached_release = cache['releases'][release_info['url']]
@@ -532,6 +566,7 @@ def main():
         if not cache.get("users"):
             cache["users"] = dict()
 
+        average = (0,0)
         for user in cache["users"]:
             if cache["users"][user].ratings:
                 for rating in cache["users"][user].ratings:
@@ -539,12 +574,18 @@ def main():
                         user_nick = ctx.guild.get_member(int(user)).display_name 
                         if ctx.author.id == int(user):
                             user_nick = "**" + user_nick + "**"
+                        average = (average[0] + rating.rating, average[1] + 1)
                         star_rating = "<:star:1135605958333186149>" * int(rating.rating) + "<:half:1135605972564455434> "  * (1 if rating.rating != int(rating.rating) else 0)
                         user_ratings += f"◦ [{user_nick}]({rympy.ROOT_URL}/~{users[user]['rym']}) - {star_rating}\n"
                         break
         
+        average_str = str()
+        if average[1]:
+            average = average[0]/average[1]
+            average_str = f"\n\n**Sotão average rating:** {round(average, 2)} / 5.0"
+        
 
-        ratings_embed = discord.Embed(title=f"{release_info['artist_name']} - {release_info['title']} ({release_info['year']}, {release_info['release_type']})", description=user_ratings, color=line_colour, url=release_info['url'])
+        ratings_embed = discord.Embed(title=f"{release_info['artist_name']} - {release_info['title']} ({release_info['year']}, {release_info['release_type']})", description=user_ratings + average_str, color=line_colour, url=release_info['url'])
         if release_info.get('cover_url'):
             if cached_release:
                 cover_url = cached_release.cover_url
@@ -802,6 +843,21 @@ def main():
         await ctx.reply("Info saved successfully.")
 
     @bot.command()
+    async def loadcache(ctx):
+        global users, cache
+        if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
+            return
+        
+        with lzma.open('cache.lzma', 'rb') as file:
+            cache = pickle.load(file)
+            if cache.get("simple_releases"):
+                for release in cache.get("simple_releases"):
+                    if release in cache.get("releases"):
+                        cache["simple_releases"].pop(release)
+        
+        await ctx.reply("Cache loaded successfully.")
+
+    @bot.command()
     async def savecache(ctx):
         global users, cache
         if vars.admin_role_name not in [role.name for role in ctx.author.roles] and ctx.author.id not in vars.whitelisted_ids:
@@ -809,9 +865,6 @@ def main():
         
         with lzma.open('cache_tmp.lzma', 'wb') as file:
             pickle.dump(cache, file)
-
-        shutil.copy2("cache_tmp.lzma", "cache.lzma")
-        os.remove("cache_tmp.lzma")
         
         await ctx.reply("Info saved successfully.")
 
