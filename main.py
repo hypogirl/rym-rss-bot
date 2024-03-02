@@ -1,5 +1,4 @@
 import asyncio
-import random
 import math
 import json
 import pickle
@@ -18,13 +17,16 @@ from googleapiclient.discovery import build
 import googleapiclient
 import shutil
 import pylast
+from PIL import Image, ImageDraw, ImageFont
+import io
 
-global users, last, active_id, last_url
+global users, last, active_id, last_url, rate_limit
 last = None
 active_id = None
 users = dict()
 cache = dict()
 date_format = "%a, %d %b %Y %H:%M:%S %z"
+rate_limit = False
 
 with open('users.json') as users_json:
     users = json.load(users_json)
@@ -41,19 +43,19 @@ def get_current_time_text():
     current_time = now.strftime("%H:%M:%S")
     return "[" + current_time + "]"
 
-def google_search(search_term):
+def google_search(search_term, search_type="searchTypeUndefined"):
     service = build("customsearch", "v1", developerKey=vars.google_api_key)
     service_2 = build("customsearch", "v1", developerKey=vars.google_api_key_2)
     try:
-        res = service.cse().list(q=search_term, cx=vars.cse_id, num=1).execute()
+        res = service.cse().list(q=search_term, cx=vars.cse_id, searchType=search_type, num=1).execute()
     except googleapiclient.errors.HttpError:
         try:
-            res = service.cse().siterestrict().list(q=search_term, cx=vars.cse_id, num=1).execute()
+            res = service.cse().siterestrict().list(q=search_term, cx=vars.cse_id, searchType=search_type, num=1).execute()
         except googleapiclient.errors.HttpError:
             try:
-                res = service_2.cse().list(q=search_term, cx=vars.cse_id, num=1).execute()
+                res = service_2.cse().list(q=search_term, cx=vars.cse_id, searchType=search_type, num=1).execute()
             except googleapiclient.errors.HttpError:
-                res = service_2.cse().siterestrict().list(q=search_term, cx=vars.cse_id, num=1).execute()
+                res = service_2.cse().siterestrict().list(q=search_term, cx=vars.cse_id, searchType=search_type, num=1).execute()
     return res['items']
 
 def get_release_info_from_google(url):
@@ -109,6 +111,8 @@ def parse_ratings(rym_user):
     url = f"https://rateyourmusic.com/~{rym_user}/data/rss"
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
     rss_response = requests.get(url, headers=headers) # get request using a browser header to avoid a RYM ban
+    if rss_response.status_code == 503:
+        return None
     print(get_current_time_text(), "Parsing ratings...")
     parsed_xml = ET.fromstring(rss_response.content)
     children = parsed_xml[0]
@@ -345,7 +349,7 @@ async def get_recent_info(member, rym_user, last_tmp, feed_channel, user_id):
 def main():
     intents = discord.Intents.all()
     bot = commands.Bot(command_prefix= vars.command_prefix, intents= intents)
-    network = pylast.LastFMNetwork(api_key=vars.lfm_key, api_secret=vars.lfm_secret)
+    lfm_network = pylast.LastFMNetwork(api_key=vars.lfm_key, api_secret=vars.lfm_secret)
 
     @bot.event
     async def on_ready():
@@ -507,7 +511,7 @@ def main():
     async def w(ctx, *, arg=None):
         global users
         if not arg:
-            user = network.get_user(users[str(ctx.author.id)]["lfm"])
+            user = lfm_network.get_user(users[str(ctx.author.id)]["lfm"])
             if not (current_track := user.get_now_playing()):
                 last_track = user.get_recent_tracks(limit=1)[0]
                 arg = str(last_track.track.artist) + " " + last_track.album.title()
@@ -594,6 +598,93 @@ def main():
             ratings_embed.set_thumbnail(url=cover_url)
 
         await ctx.send(embed=ratings_embed)
+
+    @bot.command()
+    async def c(ctx, *, arg=None):
+        global rate_limit, cache
+        if rate_limit:
+            await ctx.reply("Rate limited. I'll send the collage as soon as possible.")
+            while rate_limit:
+                await asyncio.sleep(60)
+                print(get_current_time_text(), f"Still waiting for {users[str(ctx.author.id)]['rym']}'s chart.")
+        
+        if arg not in ["3x3","4x4","5x5"]:
+            arg = "3x3"
+
+        size = int(arg[0])
+        try:
+            ratings = parse_ratings(users[str(ctx.author.id)]["rym"])
+        except TypeError:
+            await ctx.reply("Rate limited. I'll send the collage as soon as possible.")
+            rate_limit = True
+            await asyncio.sleep(60*15)
+            rate_limit = False
+            ratings = parse_ratings(users[str(ctx.author.id)]["rym"])
+        
+        album_titles_links = [(re.search(r" (.+) by",rating[0]).group(1),rating[1]) for rating in ratings]
+
+        unfindable_albums = list()
+        album_cover_links = list()
+        for rym_title,link in album_titles_links:
+            if link in cache["releases"] and cache["releases"][link].cover_url:
+                album_cover_links.append((cache["releases"][link].cover_url, cache["releases"][link].title + "\n" + cache["releases"][link].artist_name))
+                continue
+            title_split = link.split("/")[-3:-1]
+            title = " ".join(title_split).replace("-"," ")
+            results = lfm_network.search_for_album(title).get_next_page()
+            if results:
+                album = lfm_network.search_for_album(title).get_next_page()[0]
+                if album.get_cover_image():
+                    album_cover_links.append((album.get_cover_image(), album.title + "\n" + str(album.artist)))
+                else:
+                    cover_url = google_search(title, search_type="image")[0]["link"]
+                    if cover_url.endswith(".jpg"):
+                        album_cover_links.append((cover_url, album.title + "\n" + str(album.artist)))
+                    else:
+                        unfindable_albums.append(title_split[0] + " - " + title_split[1])
+            else:
+                cover_url = google_search(title, search_type="image")[0]["link"]
+                if cover_url.endswith(".jpg"):
+                    album_cover_links.append((cover_url, album.title + "\n" + str(album.artist)))
+                else:
+                    unfindable_albums.append(title_split[0] + " - " + rym_title)
+            
+        album_covers = list()
+        for link, text in album_cover_links:
+            response = requests.get(link)
+            img = Image.open(io.BytesIO(response.content))
+            draw = ImageDraw.Draw(img)
+            text_color = (255, 255, 255)
+            shadow_color = (0, 0, 0)
+            text_position = (3, 3)
+            font = ImageFont.truetype('font.ttf', size=16)
+            shadow_offset = 2
+            shadow_position = (text_position[0] + shadow_offset, text_position[1] + shadow_offset)
+            draw.text(shadow_position, text, font=font, fill=shadow_color)
+            draw.text(text_position, text, font=font, fill=text_color)
+            album_covers.append(img)
+
+        collage_size = (size * 300, size * 300)
+
+        collage = Image.new('RGB', collage_size)
+
+        for i in range(size):
+            for j in range(size):
+                index = i * 3 + j
+                if index < len(album_covers):
+                    collage.paste(album_covers[index], (j * 300, i * 300))
+
+        description = f"**User: [{ctx.author.display_name}](https://rateyourmusic.com/~{users[str(ctx.author.id)]['rym']})" 
+        if unfindable_albums:
+            description = "I couldn't find the following albums:\n- " + "\n- ".join(unfindable_albums)
+
+        buffered_io = io.BytesIO()
+        collage.save(buffered_io, format='JPEG')
+
+        buffered_io.seek(0)
+
+        await ctx.send(file=discord.File(fp=buffered_io, filename=f"{arg}_collage.jpeg"),
+            embed=discord.Embed(title=f"Recent RYM ratings {arg} chart", description=description, color=0x2d5ea9))
 
     def gen_button(index, formatted_pages, embed, message, view, left):
         button = discord.ui.Button(label="◄")
